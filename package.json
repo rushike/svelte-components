@@ -1,0 +1,33 @@
+{
+  "name": "@rushike/svelte-components",
+  "version": "0.1.0",
+  "type": "module",
+  "main": "src/index.ts",
+  "exports": {
+    ".": "./src/index.ts",
+    "./*": "./src/components/*"
+  },
+  "scripts": {
+    "dev": "echo 'Svelte UI uses raw files'",
+    "build": "echo 'No build step required for workspace usage'"
+  },
+  "dependencies": {
+    "@svar-ui/svelte-core": "^2.5.3",
+    "@svar-ui/svelte-filemanager": "^2.4.0",
+    "@svar-ui/svelte-grid": "^2.5.0",
+    "bits-ui": "^2.19.0",
+    "clsx": "^2.1.1",
+    "dockview-core": "^5.0.0",
+    "lucide-svelte": "^1.0.1",
+    "mode-watcher": "^1.1.0",
+    "svelte": "^5.43.14",
+    "tabulator-tables": "^6.2.1",
+    "tailwind-merge": "^3.6.0",
+    "uuid": "^13.0.0",
+    "@rushike/sqlite3-client": "workspace:*",
+    "monaco-editor": "^0.34.1"
+  },
+  "devDependencies": {
+    "typescript": "^5.9.3"
+  }
+}
