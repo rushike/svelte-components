@@ -1,8 +1,19 @@
 
 <script>
-  import { Filemanager, Material } from "@svar-ui/svelte-filemanager";
-  import {dirtree, mkdir, rmdir, readFile, writeFile} from "/myfinsheet-client/opfs.js"
+  import { Filemanager, Material, getMenuOptions } from "@svar-ui/svelte-filemanager";
+  import MyFS from "@rushike/myfs";
   
+  const myfs = new MyFS();
+
+  function customMenuOptions(type, item) {
+    const options = getMenuOptions(type, item) || [];
+    if (type === "folder") {
+      if (!options.some(o => o.id === "download")) {
+        options.push({ id: "download", icon: "wxi-download", text: "Download" });
+      }
+    }
+    return options;
+  }
 
   function convertToSvarData(data) {
     const flatList = [];
@@ -43,36 +54,36 @@
   };
 
   $effect(()=>{
-      dirtree().then(d => {
+      myfs.dirtree("opfs:///").then(d => {
         rawdata = convertToSvarData(d);
         loaded = true;
       })
   })
 
-  /**
- * Triggers a download for a File or Blob object.
- * @param {File|Blob} file - The file object to download.
- * @param {string} filename - Optional filename (defaults to file.name).
- */
-function downloadFile(file, filename) {
-  // 1. Create a URL representing the file
-  const url = URL.createObjectURL(file);
-  
-  // 2. Create a temporary anchor (<a>) element
-  const anchor = document.createElement('a');
-  anchor.href = url;
-  
-  // 3. Set the download attribute with the desired filename
-  anchor.download = filename || file.name || 'download';
-  
-  // 4. Append to body, click it, and remove it
-  document.body.appendChild(anchor);
-  anchor.click();
-  document.body.removeChild(anchor);
-  
-  // 5. Clean up the URL to free up memory
-  URL.revokeObjectURL(url);
-}
+  async function downloadStream(stream, name) {
+    try {
+      if (window.showSaveFilePicker) {
+        // Modern approach: Streams directly to disk without bloating RAM
+        const handle = await window.showSaveFilePicker({ suggestedName: name });
+        const writable = await handle.createWritable();
+        await stream.pipeTo(writable);
+      } else {
+        // Fallback for browsers that don't support showSaveFilePicker (loads into memory)
+        const response = new Response(stream);
+        const blob = await response.blob();
+        const url = URL.createObjectURL(blob);
+        const anchor = document.createElement('a');
+        anchor.href = url;
+        anchor.download = name;
+        document.body.appendChild(anchor);
+        anchor.click();
+        document.body.removeChild(anchor);
+        URL.revokeObjectURL(url);
+      }
+    } catch (err) {
+      if (err.name !== 'AbortError') console.error("Download failed:", err);
+    }
+  }
 
   function init(api) {
     const lastPath = localStorage.getItem("fm:lastPath");
@@ -97,13 +108,13 @@ function downloadFile(file, filename) {
 
     api.on("create-file", async ({file, parent, newId}) => {
       if (file?.type == "folder") {
-       await mkdir(newId)
+       await myfs.mkdir("opfs://" + newId)
       }
       else if (file.file instanceof File) { 
-        await writeFile(newId, file.file)
+        await myfs.writeFile("opfs://" + newId, file.file)
       }
       else if (file.type == "file") {
-        await writeFile(newId, "")
+        await myfs.writeFile("opfs://" + newId, "")
       }   
     });
 
@@ -114,7 +125,7 @@ function downloadFile(file, filename) {
     api.on("delete-files", async (event) => {
       for(let id of event.ids) {
         console.log("deleting id : ", id);
-        await rmdir(id);
+        await myfs.rmdir("opfs://" + id);
         console.log("deleted id : ", id);
         
       }
@@ -130,7 +141,8 @@ function downloadFile(file, filename) {
 
     api.on("download-file", async (event) => {
       console.log("Downloading file ID:", event.id);
-      downloadFile(await readFile(event.id))
+      const { stream, name, type } = await myfs.download("opfs://" + event.id);
+      await downloadStream(stream, name);
     });
 
     // --- UI Navigation & Interaction ---
@@ -182,7 +194,7 @@ function downloadFile(file, filename) {
 {#if loaded}
   <Material>
     <div class="filemanager">
-      <Filemanager  {init} data={rawdata} {drive} />
+      <Filemanager {init} data={rawdata} {drive} menuOptions={customMenuOptions} />
     </div>
   </Material>
 {/if}
