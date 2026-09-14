@@ -119,13 +119,13 @@
 </script>
 
 <div
-  class="flex h-screen w-full bg-ui-bg text-ui-text font-sans overflow-hidden"
+  class="flex h-screen w-full bg-background text-foreground font-sans overflow-hidden"
 >
   <aside
-    class="w-72 border-r border-ui-border bg-ui-surface flex flex-col shadow-xl"
+    class="w-72 border-r border-border bg-card flex flex-col shadow-xl"
   >
     <div class="p-6 flex justify-between items-center">
-      <h2 class="text-[11px] font-bold text-ui-muted uppercase tracking-widest">
+      <h2 class="text-[11px] font-bold text-muted-foreground uppercase tracking-widest">
         Document Types
       </h2>
     </div>
@@ -136,8 +136,8 @@
           onclick={() => onDocumentTypeChange(doc)}
           class="w-full flex items-center px-4 py-2 text-sm font-medium transition-all rounded
             {selectedDoc?.id === doc.id
-            ? 'bg-ui-active text-white'
-            : 'text-ui-muted hover:bg-ui-hover hover:text-ui-text'}"
+            ? 'bg-primary text-primary-foreground text-white'
+            : 'text-muted-foreground hover:bg-accent text-accent-foreground hover:text-foreground'}"
         >
           <span class="mr-3 flex items-center justify-center w-4">
             <span
@@ -153,9 +153,9 @@
       {/each}
     </nav>
 
-    <div class="p-4 bg-ui-bg/50 border-t border-ui-border">
-      <p class="text-[10px] font-mono leading-tight text-ui-muted">
-        <span class="text-ui-log-key">STATUS:</span>
+    <div class="p-4 bg-background/50 border-t border-border">
+      <p class="text-[10px] font-mono leading-tight text-muted-foreground">
+        <span class="text-primary">STATUS:</span>
         {isLoading ? "Syncing..." : "Connected"}
       </p>
     </div>
@@ -164,12 +164,12 @@
   <main class="flex-1 flex flex-col min-w-0">
     {#if selectedDoc}
       <header
-        class="border-b border-ui-border bg-ui-surface/50 backdrop-blur-md"
+        class="border-b border-border bg-card/50 backdrop-blur-md"
       >
         <div class="h-16 flex items-center justify-between px-8">
           <div class="flex items-center gap-4">
             <div
-              class="px-2 py-1 rounded bg-ui-header text-[10px] font-mono text-ui-muted border border-ui-border"
+              class="px-2 py-1 rounded bg-muted text-[10px] font-mono text-muted-foreground border border-border"
             >
               DOC_TYPE
             </div>
@@ -178,7 +178,7 @@
             </h1>
             {#if isGridLoading}
               <div
-                class="w-4 h-4 border-2 border-ui-focus border-t-transparent rounded-full animate-spin"
+                class="w-4 h-4 border-2 border-ring border-t-transparent rounded-full animate-spin"
               ></div>
             {/if}
           </div>
@@ -204,13 +204,13 @@
           </div>
         </div>
 
-        <div class="flex px-8 border-t border-ui-border">
+        <div class="flex px-8 border-t border-border">
           <button
             onclick={() => handleTabChange("document")}
             class="px-4 py-3 text-sm font-medium border-b-2 transition-colors {activeTab ===
             'document'
-              ? 'border-ui-focus text-white'
-              : 'border-transparent text-ui-muted hover:text-ui-text'}"
+              ? 'border-ring text-white'
+              : 'border-transparent text-muted-foreground hover:text-foreground'}"
           >
             Document
           </button>
@@ -218,8 +218,8 @@
             onclick={() => handleTabChange("records")}
             class="px-4 py-3 text-sm font-medium border-b-2 transition-colors {activeTab ===
             'records'
-              ? 'border-ui-focus text-white'
-              : 'border-transparent text-ui-muted hover:text-ui-text'}"
+              ? 'border-ring text-white'
+              : 'border-transparent text-muted-foreground hover:text-foreground'}"
           >
             Records
           </button>
@@ -227,8 +227,8 @@
             onclick={() => handleTabChange("transaction")}
             class="px-4 py-3 text-sm font-medium border-b-2 transition-colors {activeTab ===
             'transaction'
-              ? 'border-ui-focus text-white'
-              : 'border-transparent text-ui-muted hover:text-ui-text'}"
+              ? 'border-ring text-white'
+              : 'border-transparent text-muted-foreground hover:text-foreground'}"
           >
             Transaction
           </button>
@@ -237,15 +237,15 @@
 
       <div class="flex-1 p-6 flex flex-col min-h-0">
         <div
-          class="flex-1 rounded-xl border border-ui-border bg-ui-bg shadow-inner flex flex-col overflow-hidden"
+          class="flex-1 rounded-xl border border-border bg-background shadow-inner flex flex-col overflow-hidden"
         >
           <div
-            class="flex items-center justify-between px-4 py-2 bg-ui-surface border-b border-ui-border"
+            class="flex items-center justify-between px-4 py-2 bg-card border-b border-border"
           >
-            <span class="text-[10px] font-mono text-ui-muted uppercase">
+            <span class="text-[10px] font-mono text-muted-foreground uppercase">
               {activeTab} Viewer
             </span>
-            <span class="text-[10px] font-mono text-ui-muted/50">
+            <span class="text-[10px] font-mono text-muted-foreground/50">
               tabular/data
             </span>
           </div>
@@ -253,7 +253,7 @@
           <div class="flex-1 w-full overflow-hidden relative">
             {#if activeTab === "document"}
               <div
-                class="flex flex-col items-center justify-center h-full w-full text-ui-muted/30"
+                class="flex flex-col items-center justify-center h-full w-full text-muted-foreground/30"
               >
                 <div class="text-5xl mb-4">⬚</div>
                 <p class="text-sm font-medium">
@@ -275,7 +275,7 @@
                 </div>
                 {#if records.length > PAGE_SIZE}
                   <div
-                    class="h-10 border-t border-ui-border flex items-center justify-between px-4 text-xs"
+                    class="h-10 border-t border-border flex items-center justify-between px-4 text-xs"
                   >
                     <span
                       >Showing {currentRecordPage * PAGE_SIZE + 1} to {Math.min(
@@ -285,12 +285,12 @@
                     >
                     <div class="flex gap-2">
                       <button
-                        class="px-2 py-1 rounded bg-ui-surface border border-ui-border disabled:opacity-50"
+                        class="px-2 py-1 rounded bg-card border border-border disabled:opacity-50"
                         disabled={currentRecordPage === 0}
                         onclick={() => currentRecordPage--}>Prev</button
                       >
                       <button
-                        class="px-2 py-1 rounded bg-ui-surface border border-ui-border disabled:opacity-50"
+                        class="px-2 py-1 rounded bg-card border border-border disabled:opacity-50"
                         disabled={(currentRecordPage + 1) * PAGE_SIZE >=
                           records.length}
                         onclick={() => currentRecordPage++}>Next</button
@@ -314,7 +314,7 @@
                 </div>
                 {#if transactions.length > PAGE_SIZE}
                   <div
-                    class="h-10 border-t border-ui-border flex items-center justify-between px-4 text-xs"
+                    class="h-10 border-t border-border flex items-center justify-between px-4 text-xs"
                   >
                     <span
                       >Showing {currentTransactionPage * PAGE_SIZE + 1} to {Math.min(
@@ -324,12 +324,12 @@
                     >
                     <div class="flex gap-2">
                       <button
-                        class="px-2 py-1 rounded bg-ui-surface border border-ui-border disabled:opacity-50"
+                        class="px-2 py-1 rounded bg-card border border-border disabled:opacity-50"
                         disabled={currentTransactionPage === 0}
                         onclick={() => currentTransactionPage--}>Prev</button
                       >
                       <button
-                        class="px-2 py-1 rounded bg-ui-surface border border-ui-border disabled:opacity-50"
+                        class="px-2 py-1 rounded bg-card border border-border disabled:opacity-50"
                         disabled={(currentTransactionPage + 1) * PAGE_SIZE >=
                           transactions.length}
                         onclick={() => currentTransactionPage++}>Next</button
@@ -344,7 +344,7 @@
       </div>
     {:else}
       <div
-        class="flex flex-col items-center justify-center h-full w-full text-ui-muted/30"
+        class="flex flex-col items-center justify-center h-full w-full text-muted-foreground/30"
       >
         <div class="text-5xl mb-4">⬚</div>
         <p class="text-sm font-medium">

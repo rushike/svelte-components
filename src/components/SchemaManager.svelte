@@ -208,23 +208,23 @@
 </script>
 
 <div
-    class="wrapper h-screen w-full bg-ui-bg text-ui-text font-sans overflow-hidden"
+    class="wrapper h-screen w-full bg-background text-foreground font-sans overflow-hidden"
     style="grid-template-columns: {sidebarWidth}px 4px 1fr;"
 >
     <aside
-        class="flex flex-col bg-ui-surface border-r border-ui-border overflow-hidden"
+        class="flex flex-col bg-card border-r border-border overflow-hidden"
     >
         <div
-            class="p-4 border-b border-ui-border flex justify-between items-center shrink-0"
+            class="p-4 border-b border-border flex justify-between items-center shrink-0"
         >
             <h2
-                class="text-[11px] font-bold text-ui-muted uppercase tracking-widest"
+                class="text-[11px] font-bold text-muted-foreground uppercase tracking-widest"
             >
                 Tables
             </h2>
             <button
                 onclick={refreshTables}
-                class="text-ui-muted hover:text-ui-focus text-xs">↻</button
+                class="text-muted-foreground hover:text-ui-focus text-xs">↻</button
             >
         </div>
         <nav class="flex-1 px-2 py-3 space-y-1 overflow-y-auto">
@@ -233,10 +233,10 @@
                     onclick={() => inspectTable(table)}
                     class="w-full flex items-center px-3 py-1.5 text-sm rounded transition-colors
                     {selectedTable === table
-                        ? 'bg-ui-active text-white'
-                        : 'text-ui-muted hover:bg-ui-hover'}"
+                        ? 'bg-primary text-primary-foreground text-white'
+                        : 'text-muted-foreground hover:bg-accent text-accent-foreground'}"
                 >
-                    <span class="mr-2 text-ui-log-key text-[10px]">⊞</span>
+                    <span class="mr-2 text-primary text-[10px]">⊞</span>
                     {table}
                 </button>
             {/each}
@@ -247,7 +247,7 @@
 
     <main class="flex flex-col min-w-0 overflow-hidden">
         <header
-            class="h-12 border-b border-ui-border bg-ui-header flex items-center px-4 gap-4 shrink-0"
+            class="h-12 border-b border-border bg-muted flex items-center px-4 gap-4 shrink-0"
         >
             <button
                 onclick={runQuery}
@@ -257,13 +257,13 @@
             </button>
             <div class="h-4 w-px bg-ui-border"></div>
             <span
-                class="text-[10px] font-mono text-ui-muted uppercase tracking-tighter"
+                class="text-[10px] font-mono text-muted-foreground uppercase tracking-tighter"
             >
                 Ctrl + Enter to Execute
             </span>
             {#if isLoading}
                 <div
-                    class="ml-auto w-4 h-4 border-2 border-ui-focus border-t-transparent rounded-full animate-spin"
+                    class="ml-auto w-4 h-4 border-2 border-ring border-t-transparent rounded-full animate-spin"
                 ></div>
             {/if}
         </header>
@@ -278,16 +278,16 @@
 
             <div class="resizer-h" onmousedown={startVerticalResize}></div>
 
-            <div class="flex flex-col bg-ui-bg overflow-hidden">
+            <div class="flex flex-col bg-background overflow-hidden">
                 <div
-                    class="px-4 py-1 bg-ui-surface border-b border-ui-border flex justify-between items-center shrink-0"
+                    class="px-4 py-1 bg-card border-b border-border flex justify-between items-center shrink-0"
                 >
-                    <span class="text-[10px] font-mono text-ui-muted uppercase"
+                    <span class="text-[10px] font-mono text-muted-foreground uppercase"
                         >Results</span
                     >
                     {#if error}
                         <span
-                            class="text-[10px] font-mono text-ui-error uppercase"
+                            class="text-[10px] font-mono text-destructive uppercase"
                             >{error}</span
                         >
                     {/if}
@@ -302,7 +302,7 @@
                         </WillowDark>
                     {:else}
                         <div
-                            class="h-full flex items-center justify-center text-ui-muted/20 italic text-sm"
+                            class="h-full flex items-center justify-center text-muted-foreground/20 italic text-sm"
                         >
                             No data returned or query not yet run
                         </div>

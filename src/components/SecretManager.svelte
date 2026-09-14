@@ -44,8 +44,8 @@
   });
 </script>
 
-<div class="flex flex-col h-full bg-ui-bg text-ui-text antialiased font-sans">
-  <header class="h-14 border-b border-ui-border bg-ui-surface flex items-center justify-between px-6 shrink-0">
+<div class="flex flex-col h-full bg-background text-foreground antialiased font-sans">
+  <header class="h-14 border-b border-border bg-card flex items-center justify-between px-6 shrink-0">
     <div class="flex items-center gap-4">
       <div class="flex items-center gap-2">
         <span class="text-accent text-xl">󰒘</span> 
@@ -54,11 +54,11 @@
       <div class="h-6 w-[1px] bg-ui-border mx-2"></div>
       
       <div class="relative">
-        <span class="absolute left-3 top-1/2 -translate-y-1/2 text-ui-muted text-xs">🔍</span>
+        <span class="absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground text-xs">🔍</span>
         <input 
           bind:value={searchQuery}
           placeholder="Filter secrets..."
-          class="bg-ui-bg border border-ui-border rounded-md pl-9 pr-4 py-1.5 text-sm focus:outline-none focus:border-accent w-64 transition-all"
+          class="bg-background border border-border rounded-md pl-9 pr-4 py-1.5 text-sm focus:outline-none focus:border-accent w-64 transition-all"
         />
       </div>
     </div>
@@ -66,7 +66,7 @@
     <div class="flex gap-2">
       <button 
         onclick={loadSecrets}
-        class="px-4 py-2 text-xs font-medium bg-ui-btn hover:bg-ui-btn-hover text-white rounded transition-colors flex items-center gap-2"
+        class="px-4 py-2 text-xs font-medium bg-primary hover:bg-primary-hover text-white rounded transition-colors flex items-center gap-2"
       >
         <span>↻</span> Refresh
       </button>
@@ -82,16 +82,16 @@
     <div class="max-w-7xl mx-auto">
       
       {#if statusMsg !== 'Ready'}
-        <div class="mb-4 px-4 py-2 rounded border {statusMsg.includes('Error') ? 'border-ui-error/50 bg-ui-error/10 text-ui-error' : 'border-accent/50 bg-accent/10 text-accent'} text-xs font-mono">
+        <div class="mb-4 px-4 py-2 rounded border {statusMsg.includes('Error') ? 'border-ui-error/50 bg-ui-error/10 text-destructive' : 'border-accent/50 bg-accent/10 text-accent'} text-xs font-mono">
           {statusMsg}
         </div>
       {/if}
 
-      <div class="bg-ui-surface border border-ui-border rounded-lg overflow-hidden shadow-sm">
+      <div class="bg-card border border-border rounded-lg overflow-hidden shadow-sm">
         <table class="w-full text-left border-collapse">
           <thead>
-            <tr class="bg-ui-header border-b border-ui-border text-[11px] uppercase tracking-wider text-ui-muted font-bold">
-              <th class="px-6 py-3 w-10"><input type="checkbox" class="rounded border-ui-border bg-ui-bg" /></th>
+            <tr class="bg-muted border-b border-border text-[11px] uppercase tracking-wider text-muted-foreground font-bold">
+              <th class="px-6 py-3 w-10"><input type="checkbox" class="rounded border-border bg-background" /></th>
               <th class="px-6 py-3">Name (Key)</th>
               <th class="px-6 py-3">Type</th>
               <th class="px-6 py-3">Source</th>
@@ -102,24 +102,24 @@
           </thead>
           <tbody class="text-sm">
             {#each filteredSecrets as secret}
-              <tr class="border-b border-ui-border hover:bg-ui-hover transition-colors group">
-                <td class="px-6 py-4"><input type="checkbox" class="rounded border-ui-border bg-ui-bg" /></td>
+              <tr class="border-b border-border hover:bg-accent text-accent-foreground transition-colors group">
+                <td class="px-6 py-4"><input type="checkbox" class="rounded border-border bg-background" /></td>
                 <td class="px-6 py-4 font-medium text-white">
                   <div class="flex flex-col">
                     <span>{secret.key}</span>
-                    <span class="text-[10px] text-ui-muted font-mono">{secret.source_id || 'no-id'}</span>
+                    <span class="text-[10px] text-muted-foreground font-mono">{secret.source_id || 'no-id'}</span>
                   </div>
                 </td>
                 <td class="px-6 py-4">
-                  <span class="px-2 py-0.5 rounded-full bg-ui-header border border-ui-border text-[10px] text-ui-log-key uppercase">
+                  <span class="px-2 py-0.5 rounded-full bg-muted border border-border text-[10px] text-primary uppercase">
                     {secret.secret_type || 'generic'}
                   </span>
                 </td>
-                <td class="px-6 py-4 text-ui-muted">{secret.source}</td>
+                <td class="px-6 py-4 text-muted-foreground">{secret.source}</td>
                 <td class="px-6 py-4">
-                  <span class="text-ui-text italic">v{secret.version}</span>
+                  <span class="text-foreground italic">v{secret.version}</span>
                 </td>
-                <td class="px-6 py-4 text-ui-muted text-xs">
+                <td class="px-6 py-4 text-muted-foreground text-xs">
                   {new Date(secret.create_ts).toLocaleDateString()}
                 </td>
                 <td class="px-6 py-4 text-right">
@@ -127,12 +127,12 @@
                     <button 
                       onclick={() => copyToClipboard(secret.value)}
                       title="Copy Secret Value"
-                      class="p-1.5 hover:bg-ui-active rounded text-ui-muted hover:text-white"
+                      class="p-1.5 hover:bg-primary text-primary-foreground rounded text-muted-foreground hover:text-white"
                     >
                       📋
                     </button>
                     <button 
-                      class="p-1.5 hover:bg-ui-active rounded text-ui-muted hover:text-white"
+                      class="p-1.5 hover:bg-primary text-primary-foreground rounded text-muted-foreground hover:text-white"
                     >
                       ⋮
                     </button>
@@ -141,7 +141,7 @@
               </tr>
             {:else}
               <tr>
-                <td colspan="7" class="px-6 py-20 text-center text-ui-muted">
+                <td colspan="7" class="px-6 py-20 text-center text-muted-foreground">
                   <div class="flex flex-col items-center gap-2">
                     <span class="text-3xl">∅</span>
                     <p>No secrets found matching your criteria.</p>
@@ -155,7 +155,7 @@
     </div>
   </main>
 
-  <footer class="h-8 border-t border-ui-border bg-ui-surface flex items-center px-6 text-[10px] text-ui-muted">
+  <footer class="h-8 border-t border-border bg-card flex items-center px-6 text-[10px] text-muted-foreground">
     <div class="flex gap-4">
       <span>Total: {secrets.length}</span>
       <span>Storage: SQLite (Local)</span>

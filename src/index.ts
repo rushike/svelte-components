@@ -12,3 +12,5 @@ export { default as SchemaManager } from './components/SchemaManager.svelte';
 export { default as SecretManager } from './components/SecretManager.svelte';
 export { default as TabulatorTable } from './components/TabulatorTable.svelte';
 export { default as TransactionView } from './components/TransactionView.svelte';
+
+export * from './lib/themeManager';

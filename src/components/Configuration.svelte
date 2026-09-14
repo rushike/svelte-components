@@ -49,11 +49,11 @@
   });
 </script>
 
-<div class="flex h-full bg-ui-bg text-ui-text antialiased font-sans">
+<div class="flex h-full bg-background text-foreground antialiased font-sans">
   
-  <aside class="w-72 bg-ui-surface border-r border-ui-border flex flex-col shadow-xl">
+  <aside class="w-72 bg-card border-r border-border flex flex-col shadow-xl">
     <div class="p-6">
-      <h2 class="text-[11px] font-bold text-ui-muted uppercase tracking-wider">Configuration Tables</h2>
+      <h2 class="text-[11px] font-bold text-muted-foreground uppercase tracking-wider">Configuration Tables</h2>
     </div>
     
     <nav class="flex-1 px-2 space-y-0.5">
@@ -62,8 +62,8 @@
           onclick={() => readFromDatabase(table)}
           class="w-full flex items-center px-4 py-2 text-sm transition-colors
             {activeTable === table 
-              ? 'bg-ui-active text-white' 
-              : 'text-ui-muted hover:bg-ui-hover hover:text-ui-text'}"
+              ? 'bg-primary text-primary-foreground text-white' 
+              : 'text-muted-foreground hover:bg-accent text-accent-foreground hover:text-foreground'}"
         >
           <span class="mr-3 text-xs {activeTable === table ? 'text-accent' : 'text-ui-border'}">
             {activeTable === table ? '●' : '○'}
@@ -73,18 +73,18 @@
       {/each}
     </nav>
 
-    <div class="p-4 bg-ui-surface border-t border-ui-border">
-      <p class="text-[11px] font-mono leading-tight {statusMsg.includes('Error') ? 'text-ui-error' : 'text-ui-muted'}">
-        <span class="text-ui-log-key">LOG:</span> {statusMsg}
+    <div class="p-4 bg-card border-t border-border">
+      <p class="text-[11px] font-mono leading-tight {statusMsg.includes('Error') ? 'text-destructive' : 'text-muted-foreground'}">
+        <span class="text-primary">LOG:</span> {statusMsg}
       </p>
     </div>
   </aside>
 
   <main class="flex-1 flex flex-col overflow-hidden">
-    <header class="h-12 border-b border-ui-border bg-ui-surface flex items-center justify-between px-6">
+    <header class="h-12 border-b border-border bg-card flex items-center justify-between px-6">
       <div class="flex items-center gap-3">
-        <div class="px-1.5 py-0.5 rounded bg-ui-border text-[10px] font-mono text-ui-muted">DB</div>
-        <h1 class="text-sm font-medium text-ui-text">{activeTable}.json</h1>
+        <div class="px-1.5 py-0.5 rounded bg-ui-border text-[10px] font-mono text-muted-foreground">DB</div>
+        <h1 class="text-sm font-medium text-foreground">{activeTable}.json</h1>
         {#if isLoading}
           <div class="w-3 h-3 border-2 border-accent border-t-transparent rounded-full animate-spin"></div>
         {/if}
@@ -93,13 +93,13 @@
       <div class="flex gap-2">
         <button 
           onclick={readFromOPFS}
-          class="px-3 py-1.5 text-xs bg-ui-btn hover:bg-ui-btn-hover text-white rounded-sm transition-colors"
+          class="px-3 py-1.5 text-xs bg-primary hover:bg-primary-hover text-white rounded-sm transition-colors"
         >
           Read OPFS
         </button>
         <button 
           onclick={e => readFromDatabase(activeTable)}
-          class="px-3 py-1.5 text-xs bg-ui-btn hover:bg-ui-btn-hover text-white rounded-sm transition-colors"
+          class="px-3 py-1.5 text-xs bg-primary hover:bg-primary-hover text-white rounded-sm transition-colors"
         >
           Read DB
         </button>
@@ -112,8 +112,8 @@
       </div>
     </header>
 
-    <div class="flex-1 p-4 bg-ui-bg flex flex-col">
-      <div class="relative flex-1 border border-ui-border bg-ui-bg overflow-hidden">
+    <div class="flex-1 p-4 bg-background flex flex-col">
+      <div class="relative flex-1 border border-border bg-background overflow-hidden">
         <div class="absolute bottom-0 right-0 px-2 py-1 bg-accent text-[10px] text-white z-10">
           JSON
         </div>
