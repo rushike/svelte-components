@@ -12,5 +12,9 @@ export { default as SchemaManager } from './components/SchemaManager.svelte';
 export { default as SecretManager } from './components/SecretManager.svelte';
 export { default as TabulatorTable } from './components/TabulatorTable.svelte';
 export { default as TransactionView } from './components/TransactionView.svelte';
+export { default as SessionManager } from './components/SessionManager.svelte';
+export { default as PDFExtractor } from './components/PDFExtractor.svelte';
+export { default as PDFExtractorApp } from './components/PDFExtractorApp.svelte';
+export { default as ResizableSplitPane } from './components/ResizableSplitPane.svelte';
 
 export * from './lib/themeManager';
