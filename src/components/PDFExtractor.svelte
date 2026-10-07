@@ -13,8 +13,30 @@
   let strokeWidth = 2;
   let globalStrokeColor = '';
 
-  // Storage key for persistent JSON config
+  // Storage keys for persistent configs
   const STORAGE_KEY = 'mypdfutils_pipeline_json_config';
+  const STORAGE_KEY_DSL = 'mypdfutils_pipeline_dsl_config';
+
+  const DEFAULT_DSL_QUERY = `LOAD "sample.pdf" AS pdf
+EXTRACT WORDS FROM pdf AS words
+FIND SENTENCES FROM words AS sentences
+FIND ROWS FROM sentences AS rows
+FIND COLUMNS FROM rows AS cols
+RETURN rows, cols`;
+
+  function getInitialDslBodyText() {
+    if (typeof localStorage !== 'undefined') {
+      const saved = localStorage.getItem(STORAGE_KEY_DSL);
+      if (saved) return saved;
+    }
+    return DEFAULT_DSL_QUERY;
+  }
+
+  // DSL & Pane tabs state
+  let dslBodyText = getInitialDslBodyText();
+  let topLeftTab = 'dsl'; // 'dsl' | 'json'
+  let bottomLeftTab = 'ast'; // 'ast' | 'logical' | 'physical' | 'output'
+  let dslCompileResponseJson = null;
 
   // View & Layout state
   let imageUrl = null;
@@ -44,10 +66,14 @@
 
   let saveNotification = false;
 
-  function saveJsonConfig() {
-    if (typeof localStorage !== 'undefined' && jsonBodyText) {
+  function saveCurrentConfig() {
+    if (typeof localStorage !== 'undefined') {
       try {
-        localStorage.setItem(STORAGE_KEY, jsonBodyText);
+        if (topLeftTab === 'dsl') {
+          localStorage.setItem(STORAGE_KEY_DSL, dslBodyText);
+        } else {
+          localStorage.setItem(STORAGE_KEY, jsonBodyText);
+        }
         saveNotification = true;
         setTimeout(() => {
           saveNotification = false;
@@ -58,16 +84,24 @@
     }
   }
 
-  // Keyboard shortcut (Cmd+R / Ctrl+R to execute, Cmd+S / Ctrl+S to save) handler
+  function handleCompileOrExecute() {
+    if (topLeftTab === 'dsl') {
+      executeDslQuery();
+    } else {
+      executePipeline();
+    }
+  }
+
+  // Keyboard shortcut (Cmd+R / Ctrl+R to execute/compile, Cmd+S / Ctrl+S to save) handler
   function handleKeyDown(e) {
     if (e.metaKey || e.ctrlKey) {
       const key = e.key.toLowerCase();
       if (key === 'r') {
         e.preventDefault();
-        executePipeline();
+        handleCompileOrExecute();
       } else if (key === 's') {
         e.preventDefault();
-        saveJsonConfig();
+        saveCurrentConfig();
       }
     }
   }
@@ -278,8 +312,8 @@
       const res = await fetch(url);
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
 
-      const headerW = res.headers.get('X-Pdf-Width');
-      const headerH = res.headers.get('X-Pdf-Height');
+      const headerW = res.headers.get('X-Pdf-Width') || res.headers.get('x-pdf-width');
+      const headerH = res.headers.get('X-Pdf-Height') || res.headers.get('x-pdf-height');
       if (headerW && headerH) {
         const parsedW = parseFloat(headerW);
         const parsedH = parseFloat(headerH);
@@ -361,6 +395,70 @@
     }
   }
 
+  // Compile and execute PDF DSL query
+  async function executeDslQuery() {
+    loading = true;
+    errorMsg = '';
+    dslCompileResponseJson = null;
+
+    try {
+      if (sessionId) {
+        await loadRawPageImage();
+      }
+      const endpoint = sessionId
+        ? `${baseUrl}/api/sessions/${sessionId}/dsl`
+        : `${baseUrl}/api/dsl/compile`;
+
+      const res = await fetch(endpoint, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ code: dslBodyText }),
+      });
+
+      if (!res.ok) {
+        const errData = await res.json().catch(() => ({}));
+        throw new Error(errData.error || `HTTP ${res.status}`);
+      }
+
+      const data = await res.json();
+      dslCompileResponseJson = data;
+
+      if (data.pdf_width && data.pdf_height) {
+        pdfWidth = data.pdf_width;
+        pdfHeight = data.pdf_height;
+      }
+
+      if (!data.success && data.error) {
+        errorMsg = `DSL Compilation/Execution Error: ${data.error}`;
+      } else if (data.results) {
+        executeResponseJson = data.results;
+
+        // Parse dynamic layer keys from results
+        const newAvailableLayers = Object.keys(data.results).filter(
+          (key) => Array.isArray(data.results[key]) && data.results[key].length > 0
+        );
+
+        availableLayers = newAvailableLayers;
+
+        const nextActiveLayers = {};
+        let totalNodes = 0;
+        newAvailableLayers.forEach((layer) => {
+          nextActiveLayers[layer] = activeLayers[layer] !== undefined ? activeLayers[layer] : true;
+          totalNodes += data.results[layer].length;
+        });
+        activeLayers = nextActiveLayers;
+
+        executionSummary = `DSL Compiled & Executed — ${totalNodes} extracted nodes across ${availableLayers.length} layers (${availableLayers.join(', ')})`;
+      } else {
+        executionSummary = 'DSL Compiled successfully (AST & Query Plan updated)';
+      }
+    } catch (err) {
+      errorMsg = `DSL Query Error: ${err.message}`;
+    } finally {
+      loading = false;
+    }
+  }
+
   // Parse returned nodes into overlay lists
   function parseResultNodes(result) {
     extractedWords = [];
@@ -414,6 +512,19 @@
     if (executeResponseJson) {
       navigator.clipboard.writeText(JSON.stringify(executeResponseJson, null, 2));
     }
+  }
+
+  // Robust bounding box extractor for any node item (Word, Sentence, Row, Column, NodeItem, TableCell)
+  function getItemBBox(item) {
+    if (!item) return { x: 0, y: 0, width: 0, height: 0, x1: 0, y1: 0, x2: 0, y2: 0 };
+    const b = item.bbox || item;
+    const x1 = b.x1 !== undefined ? b.x1 : (b.x !== undefined ? b.x : 0);
+    const y1 = b.y1 !== undefined ? b.y1 : (b.y !== undefined ? b.y : 0);
+    const x2 = b.x2 !== undefined ? b.x2 : (b.width !== undefined ? x1 + b.width : x1);
+    const y2 = b.y2 !== undefined ? b.y2 : (b.height !== undefined ? y1 + b.height : y1);
+    const width = Math.max(0, x2 - x1);
+    const height = Math.max(0, y2 - y1);
+    return { x: x1, y: y1, width, height, x1, y1, x2, y2 };
   }
 
   $: if (sessionId && currentPage !== undefined) {
@@ -498,56 +609,188 @@
       storageKey="pdf_extractor_left_width"
       on:resize={updateLayoutWidth}
     >
-      <!-- LEFT COLUMN: JSON Config Editor & Action Buttons -->
+      <!-- LEFT COLUMN: Top (DSL/JSON Editor) + Bottom (AST/Plan Output) Split -->
       {#snippet left()}
         <div class="bg-slate-950 flex flex-col h-full w-full overflow-hidden">
-          <!-- Action Header -->
-          <div class="p-3 border-b border-slate-800 flex items-center justify-between bg-slate-900/80 shrink-0">
-            <div class="flex items-center space-x-2">
-              <span class="font-bold text-xs uppercase tracking-wider text-indigo-400 flex items-center space-x-1.5">
-                <span>⚙️</span>
-                <span>Pipeline Request JSON</span>
-              </span>
+          <ResizableSplitPane
+            direction="vertical"
+            initialLeftPercent={50}
+            minLeftPx={150}
+            minRightPx={150}
+            storageKey="pdf_extractor_left_vertical_split"
+          >
+            <!-- TOP PANE: DSL / JSON Editor with Tabs -->
+            {#snippet left()}
+              <div class="bg-slate-950 flex flex-col h-full w-full overflow-hidden border-b border-slate-800">
+                <!-- Action Header & Top Tabs -->
+                <div class="p-2 border-b border-slate-800 flex items-center justify-between bg-slate-900/80 shrink-0">
+                  <div class="flex items-center space-x-1.5">
+                    <button
+                      on:click={() => (topLeftTab = 'dsl')}
+                      class="px-3 py-1 rounded text-xs font-bold transition flex items-center space-x-1.5 {topLeftTab === 'dsl' ? 'bg-indigo-600 text-white shadow' : 'bg-slate-800 text-slate-400 hover:text-slate-200'}"
+                    >
+                      <span>📜</span>
+                      <span>DSL Query</span>
+                    </button>
 
-              {#if saveNotification}
-                <span class="text-[11px] font-semibold text-emerald-400 bg-emerald-950/90 border border-emerald-700/60 px-2 py-0.5 rounded shadow-sm animate-pulse">
-                  ✓ Saved!
-                </span>
-              {/if}
-            </div>
+                    <button
+                      on:click={() => (topLeftTab = 'json')}
+                      class="px-3 py-1 rounded text-xs font-bold transition flex items-center space-x-1.5 {topLeftTab === 'json' ? 'bg-indigo-600 text-white shadow' : 'bg-slate-800 text-slate-400 hover:text-slate-200'}"
+                    >
+                      <span>⚙️</span>
+                      <span>JSON Request</span>
+                    </button>
 
-            <div class="flex items-center space-x-2">
-              <button
-                on:click={saveJsonConfig}
-                title="Save Pipeline JSON to LocalStorage (⌘S / Ctrl+S)"
-                class="bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs px-2.5 py-1.5 rounded font-medium border border-slate-700 transition shadow flex items-center space-x-1"
-              >
-                <span>💾</span>
-                <span>Save</span>
-                <span class="text-[10px] bg-slate-900 px-1 py-0.5 rounded font-mono text-slate-400">⌘S</span>
-              </button>
+                    {#if saveNotification}
+                      <span class="text-[11px] font-semibold text-emerald-400 bg-emerald-950/90 border border-emerald-700/60 px-2 py-0.5 rounded shadow-sm animate-pulse">
+                        ✓ Saved!
+                      </span>
+                    {/if}
+                  </div>
 
-              <button
-                on:click={executePipeline}
-                disabled={loading || !sessionId}
-                title="Execute Pipeline (⌘R / Ctrl+R)"
-                class="bg-emerald-600 hover:bg-emerald-500 disabled:opacity-50 text-white text-xs px-3 py-1.5 rounded font-semibold transition shadow flex items-center space-x-1.5"
-              >
-                <span>⚡</span>
-                <span>Execute (JSON)</span>
-                <span class="text-[10px] bg-emerald-700/80 px-1 py-0.5 rounded font-mono text-emerald-100">⌘R</span>
-              </button>
-            </div>
-          </div>
+                  <div class="flex items-center space-x-1.5">
+                    <button
+                      on:click={saveCurrentConfig}
+                      title="Save Code to LocalStorage (⌘S / Ctrl+S)"
+                      class="bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs px-2.5 py-1 rounded font-medium border border-slate-700 transition shadow flex items-center space-x-1"
+                    >
+                      <span>💾</span>
+                      <span>Save</span>
+                      <span class="text-[10px] bg-slate-900 px-1 py-0.5 rounded font-mono text-slate-400">⌘S</span>
+                    </button>
 
-          <!-- JSON Request Textarea -->
-          <div class="flex-1 p-3 flex flex-col min-h-0">
-            <textarea
-              bind:value={jsonBodyText}
-              spellcheck="false"
-              class="w-full flex-1 bg-slate-900 border border-slate-800 rounded p-3 text-xs font-mono text-emerald-300 focus:outline-none focus:border-indigo-500 resize-none leading-relaxed"
-            ></textarea>
-          </div>
+                    <button
+                      on:click={handleCompileOrExecute}
+                      disabled={loading}
+                      title="Compile & Run Query (⌘R / Ctrl+R)"
+                      class="bg-emerald-600 hover:bg-emerald-500 disabled:opacity-50 text-white text-xs px-3 py-1 rounded font-semibold transition shadow flex items-center space-x-1.5"
+                    >
+                      <span>⚡</span>
+                      <span>{topLeftTab === 'dsl' ? 'Compile (⌘R)' : 'Execute (⌘R)'}</span>
+                    </button>
+                  </div>
+                </div>
+
+                <!-- Editor Textarea Area -->
+                <div class="flex-1 p-2.5 flex flex-col min-h-0 bg-slate-950">
+                  {#if topLeftTab === 'dsl'}
+                    <textarea
+                      bind:value={dslBodyText}
+                      spellcheck="false"
+                      placeholder="Enter PDF DSL query code..."
+                      class="w-full flex-1 bg-slate-900 border border-slate-800 rounded p-3 text-xs font-mono text-indigo-300 focus:outline-none focus:border-indigo-500 resize-none leading-relaxed"
+                    ></textarea>
+                  {:else}
+                    <textarea
+                      bind:value={jsonBodyText}
+                      spellcheck="false"
+                      class="w-full flex-1 bg-slate-900 border border-slate-800 rounded p-3 text-xs font-mono text-emerald-300 focus:outline-none focus:border-indigo-500 resize-none leading-relaxed"
+                    ></textarea>
+                  {/if}
+                </div>
+              </div>
+            {/snippet}
+
+            <!-- BOTTOM PANE: AST, Query Plan, Output Tabs -->
+            {#snippet right()}
+              <div class="bg-slate-950 flex flex-col h-full w-full overflow-hidden">
+                <!-- Bottom Tabs Bar -->
+                <div class="p-2 border-b border-slate-800 flex items-center justify-between bg-slate-900/90 shrink-0">
+                  <div class="flex items-center space-x-1">
+                    <button
+                      on:click={() => (bottomLeftTab = 'ast')}
+                      class="px-2.5 py-1 rounded text-[11px] font-semibold transition {bottomLeftTab === 'ast' ? 'bg-indigo-900/90 text-indigo-200 border border-indigo-700/80' : 'text-slate-400 hover:text-slate-200 hover:bg-slate-800'}"
+                    >
+                      <span>🌳 AST</span>
+                    </button>
+
+                    <button
+                      on:click={() => (bottomLeftTab = 'logical')}
+                      class="px-2.5 py-1 rounded text-[11px] font-semibold transition {bottomLeftTab === 'logical' ? 'bg-indigo-900/90 text-indigo-200 border border-indigo-700/80' : 'text-slate-400 hover:text-slate-200 hover:bg-slate-800'}"
+                    >
+                      <span>📐 Logical Plan</span>
+                    </button>
+
+                    <button
+                      on:click={() => (bottomLeftTab = 'physical')}
+                      class="px-2.5 py-1 rounded text-[11px] font-semibold transition {bottomLeftTab === 'physical' ? 'bg-indigo-900/90 text-indigo-200 border border-indigo-700/80' : 'text-slate-400 hover:text-slate-200 hover:bg-slate-800'}"
+                    >
+                      <span>⚙️ Physical Plan</span>
+                    </button>
+
+                    <button
+                      on:click={() => (bottomLeftTab = 'output')}
+                      class="px-2.5 py-1 rounded text-[11px] font-semibold transition {bottomLeftTab === 'output' ? 'bg-indigo-900/90 text-indigo-200 border border-indigo-700/80' : 'text-slate-400 hover:text-slate-200 hover:bg-slate-800'}"
+                    >
+                      <span>📊 Output</span>
+                    </button>
+                  </div>
+
+                  {#if dslCompileResponseJson}
+                    <span class="text-[10px] font-mono px-2 py-0.5 rounded border {dslCompileResponseJson.success ? 'bg-emerald-950 text-emerald-300 border-emerald-800' : 'bg-red-950 text-red-300 border-red-800'}">
+                      {dslCompileResponseJson.success ? '✓ Valid' : '❌ Error'}
+                    </span>
+                  {/if}
+                </div>
+
+                <!-- Bottom Tab Content Display Area -->
+                <div class="flex-1 p-3 overflow-auto font-mono text-xs bg-slate-950">
+                  {#if bottomLeftTab === 'ast'}
+                    {#if dslCompileResponseJson?.ast}
+                      <pre class="text-emerald-300 whitespace-pre-wrap leading-relaxed">{JSON.stringify(dslCompileResponseJson.ast, null, 2)}</pre>
+                    {:else if dslCompileResponseJson?.error}
+                      <div class="text-red-400 bg-red-950/60 p-3 rounded border border-red-800 leading-relaxed">
+                        ⚠️ {dslCompileResponseJson.error}
+                      </div>
+                    {:else}
+                      <div class="text-slate-500 italic py-8 text-center">
+                        Press ⌘R or click Compile to view AST.
+                      </div>
+                    {/if}
+
+                  {:else if bottomLeftTab === 'logical'}
+                    {#if dslCompileResponseJson?.logical_plan}
+                      <pre class="text-sky-300 whitespace-pre-wrap leading-relaxed">{JSON.stringify(dslCompileResponseJson.logical_plan, null, 2)}</pre>
+                    {:else if dslCompileResponseJson?.error}
+                      <div class="text-red-400 bg-red-950/60 p-3 rounded border border-red-800 leading-relaxed">
+                        ⚠️ {dslCompileResponseJson.error}
+                      </div>
+                    {:else}
+                      <div class="text-slate-500 italic py-8 text-center">
+                        Press ⌘R or click Compile to view Logical Plan.
+                      </div>
+                    {/if}
+
+                  {:else if bottomLeftTab === 'physical'}
+                    {#if dslCompileResponseJson?.physical_plan}
+                      <pre class="text-purple-300 whitespace-pre-wrap leading-relaxed">{JSON.stringify(dslCompileResponseJson.physical_plan, null, 2)}</pre>
+                    {:else if dslCompileResponseJson?.error}
+                      <div class="text-red-400 bg-red-950/60 p-3 rounded border border-red-800 leading-relaxed">
+                        ⚠️ {dslCompileResponseJson.error}
+                      </div>
+                    {:else}
+                      <div class="text-slate-500 italic py-8 text-center">
+                        Press ⌘R or click Compile to view Physical Plan.
+                      </div>
+                    {/if}
+
+                  {:else if bottomLeftTab === 'output'}
+                    {#if dslCompileResponseJson?.results || executeResponseJson}
+                      <pre class="text-indigo-200 whitespace-pre-wrap leading-relaxed">{JSON.stringify(dslCompileResponseJson?.results || executeResponseJson, null, 2)}</pre>
+                    {:else if dslCompileResponseJson?.error}
+                      <div class="text-red-400 bg-red-950/60 p-3 rounded border border-red-800 leading-relaxed">
+                        ⚠️ {dslCompileResponseJson.error}
+                      </div>
+                    {:else}
+                      <div class="text-slate-500 italic py-8 text-center">
+                        Press ⌘R or click Execute to view Output JSON.
+                      </div>
+                    {/if}
+                  {/if}
+                </div>
+              </div>
+            {/snippet}
+          </ResizableSplitPane>
         </div>
       {/snippet}
 
@@ -627,11 +870,12 @@
                   {#each availableLayers as layerKey}
                     {#if activeLayers[layerKey] && executeResponseJson && executeResponseJson[layerKey]}
                       {#each executeResponseJson[layerKey] as item, idx}
+                        {@const b = getItemBBox(item)}
                         <rect
-                          x={item.bbox?.x1 || item.x1 || 0}
-                          y={item.bbox?.y1 || item.y1 || 0}
-                          width={(item.bbox ? item.bbox.x2 - item.bbox.x1 : item.width) || 0}
-                          height={(item.bbox ? item.bbox.y2 - item.bbox.y1 : item.height) || 0}
+                          x={b.x}
+                          y={b.y}
+                          width={b.width}
+                          height={b.height}
                           fill={hoveredItem && hoveredItem.item === item ? getLayerStyle(layerKey).hoverFill : getLayerStyle(layerKey).fill}
                           stroke={hoveredItem && hoveredItem.item === item ? getLayerStyle(layerKey).hoverStroke : getLayerStyle(layerKey).stroke}
                           stroke-width={hoveredItem && hoveredItem.item === item ? strokeWidth + 1 : strokeWidth}
@@ -641,7 +885,7 @@
                             (hoveredItem = {
                               type: layerKey,
                               text: item.text || '',
-                              bbox: item.bbox || item,
+                              bbox: b,
                               id: idx + 1,
                               item: item,
                             })}
