@@ -26,6 +26,7 @@
     "uuid": "^13.0.0",
     "@rushike/sqlite3-client": "workspace:*",
     "@rushike/myfs": "workspace:*",
+    "@rushike/mypdfutils": "workspace:*",
     "monaco-editor": "^0.34.1"
   },
   "devDependencies": {

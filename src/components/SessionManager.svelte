@@ -1,10 +1,37 @@
 <script lang="ts">
   import { onMount, createEventDispatcher } from 'svelte';
+  import type { PdfProvider, SessionRecord } from '../lib/providers';
+  import { ServerPdfProvider, WasmPdfProvider } from '../lib/providers';
+  import { getOrInitWasmEngine } from './pdf-extractor/pdfExtractorService';
+  import {
+    STORAGE_KEY_USE_WASM,
+    getActiveSessionStorageKey,
+  } from './pdf-extractor/pdfExtractorConstants';
 
-  export let baseUrl: string = 'http://localhost:9191';
-  export let activeSessionId: string | null = null;
-  export let activeFilePath: string = '';
-  export let activePageCount: number = 1;
+  let {
+    baseUrl = 'http://localhost:9191',
+    provider = null,
+    useWasm = $bindable(false),
+    activeSessionId = $bindable(null),
+    activeFilePath = $bindable(''),
+    activePageCount = $bindable(1),
+    showModal = $bindable(false),
+  }: {
+    baseUrl?: string;
+    provider?: PdfProvider | null;
+    useWasm?: boolean;
+    activeSessionId?: string | null;
+    activeFilePath?: string;
+    activePageCount?: number;
+    showModal?: boolean;
+  } = $props();
+
+  let wasmProvider = $state<WasmPdfProvider | null>(null);
+  let wasmInitializing = $state(false);
+
+  let activeProvider = $derived(
+    provider || (useWasm && wasmProvider ? wasmProvider : new ServerPdfProvider(baseUrl))
+  );
 
   const dispatch = createEventDispatcher<{
     select: { id: string; file_path: string; page_count: number };
@@ -12,33 +39,55 @@
     delete: { id: string };
   }>();
 
-  interface SessionRecord {
-    id: string;
-    file_path: string;
-    status: string;
-    created_at: number;
-    updated_at: number;
-    config?: any;
+  let sessions = $state<SessionRecord[]>([]);
+  let loading = $state(false);
+  let errorMsg = $state('');
+  let filePathInput = $state('');
+  let uploadFiles = $state<FileList | null>(null);
+  let bankHint = $state('');
+
+  async function syncEngine() {
+    if (useWasm && !wasmProvider) {
+      wasmInitializing = true;
+      try {
+        wasmProvider = await getOrInitWasmEngine();
+      } catch (err: any) {
+        errorMsg = `Failed to initialize WASM engine: ${err.message}`;
+        useWasm = false;
+      } finally {
+        wasmInitializing = false;
+      }
+    }
+    await fetchSessions();
   }
 
-  let sessions: SessionRecord[] = [];
-  let loading = false;
-  let errorMsg = '';
-  let filePathInput = '';
-  let uploadFiles: FileList | null = null;
-  let bankHint = '';
-  let showModal = false;
-
   async function fetchSessions() {
+    if (useWasm && !wasmProvider && !provider) {
+      return;
+    }
     loading = true;
     errorMsg = '';
     try {
-      const res = await fetch(`${baseUrl}/api/sessions`);
-      if (!res.ok) throw new Error(`HTTP ${res.status}: ${res.statusText}`);
-      const data = await res.json();
-      sessions = data.sessions || [];
-      if (sessions.length > 0 && !activeSessionId) {
-        selectSession(sessions[0].id);
+      const prov = activeProvider;
+      if (!prov) return;
+      sessions = await prov.listSessions();
+      if (sessions.length > 0) {
+        const storageKey = getActiveSessionStorageKey(useWasm);
+        const savedSessionId = typeof localStorage !== 'undefined' ? localStorage.getItem(storageKey) : null;
+        const targetId = (activeSessionId && sessions.some(s => s.id === activeSessionId))
+          ? activeSessionId
+          : (savedSessionId && sessions.some(s => s.id === savedSessionId))
+            ? savedSessionId
+            : sessions[0].id;
+
+        selectSession(targetId);
+      } else {
+        activeSessionId = null;
+        activeFilePath = '';
+        activePageCount = 1;
+        if (typeof localStorage !== 'undefined') {
+          localStorage.removeItem(getActiveSessionStorageKey(useWasm));
+        }
       }
     } catch (err: any) {
       errorMsg = `Failed to fetch sessions: ${err.message}`;
@@ -51,11 +100,14 @@
     activeSessionId = id;
     loading = true;
     try {
-      const res = await fetch(`${baseUrl}/api/sessions/${id}`);
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      const data = await res.json();
+      const prov = activeProvider;
+      if (!prov) return;
+      const data = await prov.getSession(id);
       activeFilePath = data.session.file_path || '';
       activePageCount = data.page_count || 1;
+      if (typeof localStorage !== 'undefined') {
+        localStorage.setItem(getActiveSessionStorageKey(useWasm), id);
+      }
       dispatch('select', {
         id: data.session.id,
         file_path: activeFilePath,
@@ -74,26 +126,16 @@
     loading = true;
     errorMsg = '';
     try {
-      const body = {
-        file_path: filePathInput.trim(),
-        config: {
-          bank: bankHint.trim() || undefined,
-        },
+      const config = {
+        bank: bankHint.trim() || undefined,
       };
-      const res = await fetch(`${baseUrl}/api/sessions`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(body),
-      });
-      if (!res.ok) {
-        const errData = await res.json().catch(() => ({}));
-        throw new Error(errData.error || `HTTP ${res.status}`);
-      }
-      const data = await res.json();
+      const prov = activeProvider;
+      if (!prov) return;
+      const data = await prov.createSession(filePathInput.trim(), config);
       filePathInput = '';
       await fetchSessions();
-      selectSession(data.session_id);
-      dispatch('create', { id: data.session_id });
+      selectSession(data.session.id);
+      dispatch('create', { id: data.session.id });
     } catch (err: any) {
       errorMsg = `Failed to create session: ${err.message}`;
     } finally {
@@ -106,21 +148,13 @@
     loading = true;
     errorMsg = '';
     try {
-      const formData = new FormData();
-      formData.append('file', uploadFiles[0]);
-      const res = await fetch(`${baseUrl}/api/sessions/upload`, {
-        method: 'POST',
-        body: formData,
-      });
-      if (!res.ok) {
-        const errData = await res.json().catch(() => ({}));
-        throw new Error(errData.error || `HTTP ${res.status}`);
-      }
-      const data = await res.json();
+      const prov = activeProvider;
+      if (!prov) return;
+      const data = await prov.createSession(uploadFiles[0]);
       uploadFiles = null;
       await fetchSessions();
-      selectSession(data.session_id);
-      dispatch('create', { id: data.session_id });
+      selectSession(data.session.id);
+      dispatch('create', { id: data.session.id });
     } catch (err: any) {
       errorMsg = `Failed to upload file: ${err.message}`;
     } finally {
@@ -133,14 +167,16 @@
     if (!confirm(`Delete session ${id}?`)) return;
     loading = true;
     try {
-      const res = await fetch(`${baseUrl}/api/sessions/${id}`, {
-        method: 'DELETE',
-      });
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const prov = activeProvider;
+      if (!prov) return;
+      await prov.deleteSession(id);
       if (activeSessionId === id) {
         activeSessionId = null;
         activeFilePath = '';
         activePageCount = 1;
+        if (typeof localStorage !== 'undefined') {
+          localStorage.removeItem(getActiveSessionStorageKey(useWasm));
+        }
       }
       await fetchSessions();
       dispatch('delete', { id });
@@ -151,8 +187,20 @@
     }
   }
 
+  // React to engine toggle
+  $effect(() => {
+    // When useWasm changes, sync engine and load corresponding session list
+    syncEngine();
+  });
+
   onMount(() => {
-    fetchSessions();
+    if (typeof localStorage !== 'undefined') {
+      const savedEngine = localStorage.getItem(STORAGE_KEY_USE_WASM);
+      if (savedEngine === 'true') {
+        useWasm = true;
+      }
+    }
+    syncEngine();
   });
 </script>
 
@@ -163,6 +211,14 @@
       <span>📄</span>
       <span>Session:</span>
     </div>
+
+    <!-- Engine Mode Badge -->
+    <span
+      class="text-[10px] font-semibold px-2 py-0.5 rounded border shrink-0 {useWasm ? 'bg-emerald-950/80 text-emerald-400 border-emerald-800/80' : 'bg-sky-950/80 text-sky-400 border-sky-800/80'}"
+      title="Active Session Store"
+    >
+      {useWasm ? '⚡ WASM DB' : '🌐 REST Server'}
+    </span>
 
     {#if activeSessionId}
       <div class="flex items-center space-x-2 truncate">
@@ -177,13 +233,24 @@
         </span>
       </div>
     {:else}
-      <span class="text-slate-500 italic">No session active. Click Manage Sessions to create one.</span>
+      <span class="text-slate-500 italic">No session active.</span>
     {/if}
   </div>
 
   <div class="flex items-center space-x-2 shrink-0">
+    {#if sessions.length === 0}
+      <!-- Prominent Create Indicator Button -->
+      <button
+        onclick={() => (showModal = true)}
+        class="bg-emerald-600 hover:bg-emerald-500 text-white font-bold text-xs px-3 py-1.5 rounded transition shadow-lg animate-pulse flex items-center space-x-1.5"
+      >
+        <span>✨</span>
+        <span>+ Create Session</span>
+      </button>
+    {/if}
+
     <button
-      on:click={() => (showModal = true)}
+      onclick={() => (showModal = true)}
       class="bg-indigo-600 hover:bg-indigo-500 text-white font-semibold text-xs px-3 py-1.5 rounded transition shadow flex items-center space-x-1.5"
     >
       <span>🔁</span>
@@ -197,7 +264,15 @@
   <div
     style="position: fixed; top: 0; left: 0; right: 0; bottom: 0; width: 100vw; height: 100vh; z-index: 999999; background: rgba(2, 6, 23, 0.88); backdrop-filter: blur(4px);"
     class="flex items-center justify-center p-4"
-    on:click|self={() => (showModal = false)}
+    role="dialog"
+    aria-modal="true"
+    tabindex="0"
+    onclick={(e) => {
+      if (e.target === e.currentTarget) showModal = false;
+    }}
+    onkeydown={(e) => {
+      if (e.key === 'Escape') showModal = false;
+    }}
   >
     <div class="bg-slate-900 border border-indigo-900/80 rounded-xl shadow-2xl w-full max-w-3xl overflow-hidden flex flex-col max-h-[85vh]">
       <!-- Modal Header -->
@@ -206,12 +281,15 @@
           <span class="text-xl">📁</span>
           <h2 class="text-base font-bold text-white tracking-wide">Session Manager</h2>
           <span class="text-xs bg-slate-800 text-slate-400 px-2 py-0.5 rounded-full border border-slate-700">
-            {sessions.length} registered
+            {sessions.length} in {useWasm ? 'WASM SQLite DB' : 'Server'}
           </span>
+          {#if wasmInitializing}
+            <span class="text-[10px] text-amber-400 animate-pulse font-medium">● Loading WASM DB...</span>
+          {/if}
         </div>
 
         <button
-          on:click={() => (showModal = false)}
+          onclick={() => (showModal = false)}
           class="text-slate-400 hover:text-white text-lg font-bold px-2 py-0.5 rounded transition hover:bg-slate-800"
         >
           ✕
@@ -223,27 +301,42 @@
         {#if errorMsg}
           <div class="bg-red-950/80 border border-red-700 text-red-200 text-xs p-2.5 rounded flex items-center justify-between">
             <span>❌ {errorMsg}</span>
-            <button on:click={() => (errorMsg = '')} class="text-red-400 hover:text-white font-bold ml-2">✕</button>
+            <button onclick={() => (errorMsg = '')} class="text-red-400 hover:text-white font-bold ml-2">✕</button>
+          </div>
+        {/if}
+
+        <!-- Empty Sessions Callout Indicator -->
+        {#if sessions.length === 0 && !loading}
+          <div class="bg-indigo-950/60 border border-indigo-700/60 p-3.5 rounded-lg flex items-center justify-between text-xs text-indigo-200">
+            <div class="flex items-center space-x-2">
+              <span class="text-lg">💡</span>
+              <span>No active sessions found in <strong>{useWasm ? 'WASM SQLite DB' : 'Server REST API'}</strong>. Enter a path or upload a PDF below to create one.</span>
+            </div>
           </div>
         {/if}
 
         <!-- Create & Upload Forms -->
         <div class="bg-slate-950 border border-slate-800 p-3.5 rounded-lg space-y-3">
-          <div class="text-xs font-semibold text-indigo-300 uppercase tracking-wider">Create / Open New Session</div>
+          <div class="text-xs font-semibold text-indigo-300 uppercase tracking-wider flex items-center justify-between">
+            <span>Create / Open New Session</span>
+            <span class="text-[11px] text-slate-500 font-normal">Target: {useWasm ? 'Client WASM OPFS DB' : 'Server API'}</span>
+          </div>
           
           <div class="grid grid-cols-1 md:grid-cols-2 gap-3">
             <!-- Local Path -->
             <div class="space-y-1">
-              <label class="text-xs text-slate-400 block font-medium">Local Server File Path:</label>
+              <label class="text-xs text-slate-400 block font-medium">
+                {useWasm ? 'MyFS Virtual Path:' : 'Local Server File Path:'}
+              </label>
               <div class="flex space-x-1.5">
                 <input
                   type="text"
-                  placeholder="/path/to/file.pdf"
+                  placeholder={useWasm ? "sample.pdf" : "/path/to/file.pdf"}
                   bind:value={filePathInput}
                   class="flex-1 bg-slate-900 border border-slate-700 text-xs p-2 rounded text-slate-200 focus:outline-none focus:border-indigo-500"
                 />
                 <button
-                  on:click={createSessionFromPath}
+                  onclick={createSessionFromPath}
                   disabled={!filePathInput.trim() || loading}
                   class="bg-indigo-600 hover:bg-indigo-500 disabled:opacity-50 text-white text-xs px-3 rounded font-medium transition"
                 >
@@ -259,11 +352,11 @@
                 <input
                   type="file"
                   accept=".pdf"
-                  on:change={(e) => (uploadFiles = e.currentTarget.files)}
+                  onchange={(e) => (uploadFiles = (e.currentTarget as HTMLInputElement).files)}
                   class="flex-1 text-xs text-slate-400 file:mr-2 file:py-1 file:px-2 file:rounded file:border-0 file:text-xs file:font-semibold file:bg-slate-800 file:text-slate-300 hover:file:bg-slate-700 cursor-pointer"
                 />
                 <button
-                  on:click={uploadSessionFile}
+                  onclick={uploadSessionFile}
                   disabled={!uploadFiles || uploadFiles.length === 0 || loading}
                   class="bg-emerald-600 hover:bg-emerald-500 disabled:opacity-50 text-white text-xs px-3 rounded font-medium transition"
                 >
@@ -289,8 +382,10 @@
         <!-- Sessions Table -->
         <div class="border border-slate-800 rounded-lg overflow-hidden bg-slate-950">
           <div class="p-2 bg-slate-900 border-b border-slate-800 flex justify-between items-center text-xs">
-            <span class="font-semibold text-slate-300">Registered Sessions</span>
-            <button on:click={fetchSessions} class="text-indigo-400 hover:text-indigo-300 flex items-center space-x-1">
+            <span class="font-semibold text-slate-300">
+              Registered Sessions ({sessions.length})
+            </span>
+            <button onclick={fetchSessions} class="text-indigo-400 hover:text-indigo-300 flex items-center space-x-1">
               <span>🔄</span>
               <span>Refresh</span>
             </button>
@@ -310,11 +405,18 @@
                 {#if loading && sessions.length === 0}
                   <tr><td colspan="4" class="py-6 text-center text-slate-500 italic">Loading sessions...</td></tr>
                 {:else if sessions.length === 0}
-                  <tr><td colspan="4" class="py-6 text-center text-slate-500 italic">No active sessions. Create or upload a PDF session above.</td></tr>
+                  <tr>
+                    <td colspan="4" class="py-8 text-center text-slate-400 italic space-y-2">
+                      <p>No active sessions found in {useWasm ? 'WASM DB' : 'Server'}.</p>
+                      <p class="text-xs text-emerald-400 font-sans not-italic font-semibold">
+                        ▲ Use the form above to open or upload your first PDF document.
+                      </p>
+                    </td>
+                  </tr>
                 {:else}
                   {#each sessions as s (s.id)}
                     <tr
-                      on:click={() => selectSession(s.id)}
+                      onclick={() => selectSession(s.id)}
                       class="cursor-pointer transition hover:bg-slate-800/70 {activeSessionId === s.id ? 'bg-indigo-950/70 font-semibold border-l-4 border-l-indigo-500' : ''}"
                     >
                       <td class="py-2 px-3 font-mono text-indigo-300 truncate max-w-[140px]" title={s.id}>
@@ -331,7 +433,7 @@
                       </td>
                       <td class="py-2 px-3 text-right">
                         <button
-                          on:click={(e) => deleteSession(s.id, e)}
+                          onclick={(e) => deleteSession(s.id, e)}
                           title="Destroy Session"
                           class="text-slate-400 hover:text-red-400 p-1 rounded transition hover:bg-red-950/50"
                         >
@@ -350,7 +452,7 @@
       <!-- Modal Footer -->
       <div class="p-3 border-t border-slate-800 bg-slate-950 flex justify-end">
         <button
-          on:click={() => (showModal = false)}
+          onclick={() => (showModal = false)}
           class="bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs px-4 py-1.5 rounded font-medium transition"
         >
           Close

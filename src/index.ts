@@ -16,5 +16,7 @@ export { default as SessionManager } from './components/SessionManager.svelte';
 export { default as PDFExtractor } from './components/PDFExtractor.svelte';
 export { default as PDFExtractorApp } from './components/PDFExtractorApp.svelte';
 export { default as ResizableSplitPane } from './components/ResizableSplitPane.svelte';
+export { default as JsonMonacoViewer } from './components/JsonMonacoViewer.svelte';
 
 export * from './lib/themeManager';
+export * from './lib/providers';
