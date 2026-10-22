@@ -8,7 +8,7 @@ import type {
 export interface WasmProviderOptions {
   db?: any;         // SQLiteClient from @rushike/sqlite3-client
   myfs?: any;       // MyFS instance from @rushike/myfs
-  wasmModule?: any; // WASM module containing WasmPdfSession and compileDsl
+  wasmModule?: any; // WASM module containing compileDsl, executeDsl, and render
 }
 
 const STORAGE_KEY_SESSIONS = 'mypdfutils_wasm_sessions';
@@ -17,9 +17,9 @@ export class WasmPdfProvider implements PdfProvider {
   private db: any;
   private myfs: any;
   private wasm: any;
-  private activeSessions: Map<string, any> = new Map();
   private localFallbackSessions: Map<string, SessionRecord> = new Map();
   private localFiles: Map<string, Uint8Array> = new Map();
+  private sessionPasswords: Map<string, string> = new Map();
   private initialized: boolean = false;
 
   constructor(options: WasmProviderOptions = {}) {
@@ -160,10 +160,7 @@ export class WasmPdfProvider implements PdfProvider {
       throw new Error(`Session not found: ${id}`);
     }
 
-    const wasmSession = await this.getOrCreateWasmSession(session);
-    const page_count = wasmSession ? wasmSession.pageCount() : 1;
-
-    return { session, page_count };
+    return { session, page_count: 1 };
   }
 
   private async extractBytes(res: any): Promise<Uint8Array | null> {
@@ -363,19 +360,28 @@ export class WasmPdfProvider implements PdfProvider {
       }
     }
 
-    let page_count = 1;
-    if (this.wasm && bytes) {
-      const wasmSession = new this.wasm.WasmPdfSession(id, filePath, bytes);
-      this.activeSessions.set(id, wasmSession);
-      page_count = wasmSession.pageCount() || 1;
+    let pageCount = 1;
+    if (bytes && bytes.length > 0 && typeof globalThis !== 'undefined') {
+      const p = (globalThis as any).__pdfium || (globalThis as any).Module;
+      if (p && typeof p._FPDF_LoadMemDocument === 'function' && typeof p._FPDF_GetPageCount === 'function') {
+        try {
+          const ptr = p._malloc(bytes.length);
+          p.HEAPU8.set(bytes, ptr);
+          const doc = p._FPDF_LoadMemDocument(ptr, bytes.length, 0);
+          if (doc) {
+            pageCount = p._FPDF_GetPageCount(doc) || 1;
+            p._FPDF_CloseDocument(doc);
+          }
+          p._free(ptr);
+        } catch (_) {}
+      }
     }
 
-    return { session: record, page_count };
+    return { session: record, page_count: pageCount };
   }
 
   async deleteSession(id: string): Promise<boolean> {
     await this.ensureInitialized();
-    this.activeSessions.delete(id);
     this.localFallbackSessions.delete(id);
     this.persistToLocalStorage();
 
@@ -393,25 +399,17 @@ export class WasmPdfProvider implements PdfProvider {
     return true;
   }
 
-  private async getOrCreateWasmSession(session: SessionRecord): Promise<any> {
-    if (this.activeSessions.has(session.id)) {
-      return this.activeSessions.get(session.id);
+  async executeDsl(sessionId: string, code: string): Promise<DslExecutionResult> {
+    if (!this.wasm || typeof this.wasm.executeDsl !== 'function') {
+      throw new Error('executeDsl is not available in WASM bundle');
     }
 
-    if (!this.wasm) return null;
-
-    const bytes = await this.resolveFileBytes(session.file_path, session);
-
-    const wasmSession = new this.wasm.WasmPdfSession(session.id, session.file_path, bytes);
-    this.activeSessions.set(session.id, wasmSession);
-    return wasmSession;
-  }
-
-  async executeDsl(sessionId: string, code: string): Promise<DslExecutionResult> {
-    const { session } = await this.getSession(sessionId);
-    const wasmSession = await this.getOrCreateWasmSession(session);
-    if (!wasmSession) {
-      throw new Error('WasmPdfSession not available in current environment');
+    let session: SessionRecord | undefined;
+    if (sessionId) {
+      try {
+        const res = await this.getSession(sessionId);
+        session = res.session;
+      } catch (_) {}
     }
 
     const fileLoader = async (path: string) => {
@@ -426,53 +424,80 @@ export class WasmPdfProvider implements PdfProvider {
       throw new Error(`File loader: unable to resolve path "${path}" in virtual filesystem`);
     };
 
-    return await wasmSession.executeDsl(code, fileLoader);
+    // If DSL contains password, cache it for this session and persist to session config
+    const pwdMatch = code && code.match(/WITH\s+PASSWORD\s+(?:=\s*)?["']([^"']+)["']/i);
+    if (pwdMatch && sessionId) {
+      const pwd = pwdMatch[1];
+      this.sessionPasswords.set(sessionId, pwd);
+      if (session) {
+        if (!session.config) session.config = {};
+        session.config.password = pwd;
+        this.localFallbackSessions.set(sessionId, session);
+        this.persistToLocalStorage();
+      }
+    }
+
+    const result = await this.wasm.executeDsl(code, fileLoader);
+    if (result && result.results && result.results instanceof Map) {
+      result.results = Object.fromEntries(result.results);
+    }
+    return result;
   }
 
   async compileDsl(code: string): Promise<any> {
-    if (this.wasm && this.wasm.compileDsl) {
+    if (this.wasm && typeof this.wasm.compileDsl === 'function') {
       return this.wasm.compileDsl(code);
     }
-    throw new Error('compileDsl not available in WASM bundle');
+    return await this.executeDsl('', code);
   }
 
   async renderPage(
     sessionId: string,
     page: number,
     dpi: number = 300,
-    targetWidth?: number
+    targetWidth?: number,
+    password?: string
   ): Promise<RenderResult> {
-    const { session } = await this.getSession(sessionId);
-    const wasmSession = await this.getOrCreateWasmSession(session);
-    if (!wasmSession) {
-      throw new Error('WasmPdfSession not available');
+    if (!this.wasm || typeof this.wasm.render !== 'function') {
+      throw new Error('render is not available in WASM bundle');
     }
 
-    const [pdfW, pdfH] = wasmSession.pageSize(page) || [612, 792];
-    const scale = targetWidth ? targetWidth / pdfW : dpi / 72;
-    const renderW = Math.round(pdfW * scale);
-    const renderH = Math.round(pdfH * scale);
+    const { session } = await this.getSession(sessionId);
+    const bytes = await this.resolveFileBytes(session.file_path, session);
+    if (!bytes || bytes.length === 0) {
+      throw new Error(`Cannot render page: file bytes not found for ${session.file_path}`);
+    }
 
-    const rgbaBytes = wasmSession.renderPageRgba(page, renderW, renderH);
+    const scale = dpi / 72;
+    const pwd = password || this.sessionPasswords.get(sessionId) || session?.config?.password || session?.config?.pdf?.password;
+    
+    let pngBytes: Uint8Array;
+    try {
+      pngBytes = this.wasm.render(bytes, page, scale, targetWidth, pwd);
+    } catch (err: any) {
+      const msg = typeof err === 'string' ? err : err?.message || String(err);
+      throw new Error(msg);
+    }
 
-    // Draw RGBA bytes onto offscreen canvas and convert to Blob ObjectURL
-    const canvas = document.createElement('canvas');
-    canvas.width = renderW;
-    canvas.height = renderH;
-    const ctx = canvas.getContext('2d');
-    if (!ctx) throw new Error('Failed to get 2d canvas context');
-
-    const clamped = new Uint8ClampedArray(rgbaBytes);
-    const imgData = new ImageData(clamped, renderW, renderH);
-    ctx.putImageData(imgData, 0, 0);
-
-    const blob = await new Promise<Blob | null>((resolve) =>
-      canvas.toBlob((b) => resolve(b), 'image/png')
-    );
-
-    if (!blob) throw new Error('Canvas toBlob failed');
+    const blob = new Blob([pngBytes], { type: 'image/png' });
     const url = URL.createObjectURL(blob);
 
-    return { url, width: renderW, height: renderH };
+    let width = targetWidth;
+    let height: number | undefined;
+
+    if (!width) {
+      await new Promise<void>((resolve) => {
+        const img = new Image();
+        img.onload = () => {
+          width = img.naturalWidth;
+          height = img.naturalHeight;
+          resolve();
+        };
+        img.onerror = () => resolve();
+        img.src = url;
+      });
+    }
+
+    return { url, width: width || 1000, height: height || 1000 };
   }
 }

@@ -13,6 +13,7 @@
     getOrInitWasmEngine,
     syncLayersFromResponse,
     buildSublayersVisibility,
+    extractPasswordFromDsl,
   } from "./pdf-extractor/pdfExtractorService";
 
   import PDFExtractorToolbar from "./pdf-extractor/PDFExtractorToolbar.svelte";
@@ -167,18 +168,21 @@
         layoutWindowWidth > 100
           ? Math.round(layoutWindowWidth - 48)
           : undefined;
+      const pwd = extractPasswordFromDsl(dslBodyText);
       const renderRes = await activeProvider.renderPage(
         sessionId,
         currentPage,
         currentDpi,
         targetW,
+        pwd,
       );
       if (imageUrl) URL.revokeObjectURL(imageUrl);
       imageUrl = renderRes.url;
       imageWidth = renderRes.width || 1000;
       imageHeight = renderRes.height || 1000;
     } catch (err) {
-      errorMsg = `Failed to load PDF page image: ${err.message}`;
+      const msg = typeof err === "string" ? err : err?.message || String(err);
+      errorMsg = `Failed to load PDF page image: ${msg}`;
     } finally {
       loading = false;
     }
@@ -191,7 +195,9 @@
 
     try {
       if (sessionId) {
-        await loadRawPageImage();
+        await loadRawPageImage().catch((err) => {
+          console.warn("[PDFExtractor] loadRawPageImage error:", err);
+        });
       }
 
       const data = sessionId
@@ -203,6 +209,10 @@
       if (data.pdf_width && data.pdf_height) {
         pdfWidth = data.pdf_width;
         pdfHeight = data.pdf_height;
+      }
+
+      if (sessionId && !imageUrl) {
+        await loadRawPageImage().catch(() => {});
       }
 
       if (!data.success && (data.error || data.errmsg)) {

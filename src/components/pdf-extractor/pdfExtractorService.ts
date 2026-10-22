@@ -1,10 +1,98 @@
 import { WasmPdfProvider } from "../../lib/providers";
 
+let pdfiumReadyPromise: Promise<any> | null = null;
+
+/**
+ * Ensures that the official PDFium WASM engine is loaded into the browser
+ * and its exported C functions (like _FPDF_LoadMemDocument) are available on globalThis.__pdfium.
+ */
+export async function ensurePdfiumInitialized(): Promise<any> {
+  if (typeof window === "undefined") return null;
+
+  if ((window as any).__pdfium && (window as any).__pdfium._FPDF_LoadMemDocument) {
+    return (window as any).__pdfium;
+  }
+  if ((window as any).Module && (window as any).Module._FPDF_LoadMemDocument) {
+    (window as any).__pdfium = (window as any).Module;
+    return (window as any).Module;
+  }
+
+  if (pdfiumReadyPromise) return pdfiumReadyPromise;
+
+  pdfiumReadyPromise = new Promise((resolve, reject) => {
+    if ((window as any).Module && (window as any).Module._FPDF_LoadMemDocument) {
+      (window as any).__pdfium = (window as any).Module;
+      return resolve((window as any).Module);
+    }
+
+    const prevModule = (window as any).Module || {};
+    const prevInit = prevModule.onRuntimeInitialized;
+
+    (window as any).Module = {
+      ...prevModule,
+      locateFile(path: string, prefix: string) {
+        if (path.endsWith(".wasm")) {
+          return "/pdfium.wasm";
+        }
+        return (prefix || "") + path;
+      },
+      onRuntimeInitialized() {
+        (window as any).__pdfium = (window as any).Module;
+        if (typeof prevInit === "function") prevInit();
+        resolve((window as any).Module);
+      },
+      onAbort(msg: any) {
+        reject(new Error("PDFium WASM aborted: " + msg));
+      },
+    };
+
+    const existingScript = document.querySelector('script[src*="pdfium.js"]');
+    if (!existingScript) {
+      const script = document.createElement("script");
+      script.src = "/pdfium.js";
+      script.async = true;
+      script.onerror = () => reject(new Error("Failed to load /pdfium.js"));
+      document.head.appendChild(script);
+    } else {
+      const checkInterval = setInterval(() => {
+        if (
+          (window as any).Module &&
+          (window as any).Module._FPDF_LoadMemDocument
+        ) {
+          clearInterval(checkInterval);
+          (window as any).__pdfium = (window as any).Module;
+          resolve((window as any).Module);
+        }
+      }, 50);
+
+      setTimeout(() => {
+        clearInterval(checkInterval);
+        if (
+          (window as any).Module &&
+          (window as any).Module._FPDF_LoadMemDocument
+        ) {
+          (window as any).__pdfium = (window as any).Module;
+          resolve((window as any).Module);
+        } else {
+          reject(new Error("Timed out waiting for PDFium WASM engine"));
+        }
+      }, 10000);
+    }
+  });
+
+  return pdfiumReadyPromise;
+}
+
 /**
  * Initializes the WASM engine, loading SQLite OPFS database, MyFS filesystem,
- * and the compiled Rust WebAssembly module.
+ * PDFium engine, and the compiled Rust WebAssembly module.
  */
 export async function initializeWasmEngine(): Promise<WasmPdfProvider> {
+  // Ensure PDFium runtime is ready before invoking WASM methods
+  await ensurePdfiumInitialized().catch((err) => {
+    console.warn("[pdfExtractorService] PDFium initialization warning:", err);
+  });
+
   let mypdfutils: any;
   try {
     mypdfutils = await import("@rushike/mypdfutils");
@@ -40,8 +128,9 @@ export async function initializeWasmEngine(): Promise<WasmPdfProvider> {
     db,
     myfs,
     wasmModule: {
-      WasmPdfSession: mypdfutils.WasmPdfSession,
       compileDsl: mypdfutils.compileDsl,
+      executeDsl: mypdfutils.executeDsl,
+      render: mypdfutils.render,
     },
   });
 }
@@ -127,4 +216,13 @@ export function buildSublayersVisibility(
     }
   }
   return nextVis;
+}
+
+/**
+ * Extracts password if present in a DSL query (e.g., LOAD "..." WITH PASSWORD "secret" AS ...).
+ */
+export function extractPasswordFromDsl(code?: string): string | undefined {
+  if (!code) return undefined;
+  const match = code.match(/WITH\s+PASSWORD\s+(?:=\s*)?["']([^"']+)["']/i);
+  return match ? match[1] : undefined;
 }

@@ -81,7 +81,8 @@ export class ServerPdfProvider implements PdfProvider {
     sessionId: string,
     page: number,
     dpi: number = 300,
-    targetWidth?: number
+    targetWidth?: number,
+    password?: string
   ): Promise<RenderResult> {
     const params = new URLSearchParams({
       page: page.toString(),
@@ -89,6 +90,9 @@ export class ServerPdfProvider implements PdfProvider {
     });
     if (targetWidth) {
       params.append('target_width', targetWidth.toString());
+    }
+    if (password) {
+      params.append('password', password);
     }
 
     const res = await fetch(`${this.baseUrl}/api/sessions/${sessionId}/render?${params.toString()}`);
