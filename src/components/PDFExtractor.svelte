@@ -36,9 +36,16 @@
   let wasmInitializing = $state(false);
   let wasmProviderInstance = $state(null);
 
-  let serverProviderInstance = $derived(
-    provider || new ServerPdfProvider(baseUrl),
-  );
+  let currentBaseUrl = $state(baseUrl);
+  let serverProviderInstance = $state(new ServerPdfProvider(baseUrl));
+
+  $effect(() => {
+    if (baseUrl !== currentBaseUrl) {
+      currentBaseUrl = baseUrl;
+      serverProviderInstance = new ServerPdfProvider(baseUrl);
+    }
+  });
+
   let activeProvider = $derived(
     provider
       ? provider
@@ -108,8 +115,13 @@
   let zoomLevel = $state(1.0);
   let layoutWindowWidth = $state(800);
   let rightPaneElement = $state(null);
+  let renderedSessionId = $state(null);
+  let renderedPage = $state(null);
+  let renderedDpi = $state(null);
 
-  let loading = $state(false);
+  let isImageLoading = $state(false);
+  let isExecuting = $state(false);
+  let loading = $derived(isImageLoading || isExecuting);
   let errorMsg = $state("");
   let showOutputModal = $state(false);
   let showRightLayersPanel = $state(true);
@@ -135,16 +147,12 @@
     }
   }
 
-  function handleCompileOrExecute() {
-    executeDslQuery();
-  }
-
   function handleKeyDown(e) {
     if (e.metaKey || e.ctrlKey) {
       const key = e.key.toLowerCase();
       if (key === "r") {
         e.preventDefault();
-        handleCompileOrExecute();
+        executeDslQuery();
       } else if (key === "s") {
         e.preventDefault();
         saveCurrentConfig();
@@ -152,18 +160,11 @@
     }
   }
 
-  function updateLayoutWidth() {
-    if (rightPaneElement) {
-      layoutWindowWidth = rightPaneElement.clientWidth || 800;
-    }
-  }
-
   async function loadRawPageImage() {
-    if (!sessionId) return;
-    loading = true;
+    if (!sessionId || isImageLoading) return;
+    isImageLoading = true;
     errorMsg = "";
     try {
-      updateLayoutWidth();
       const targetW =
         layoutWindowWidth > 100
           ? Math.round(layoutWindowWidth - 48)
@@ -180,39 +181,48 @@
       imageUrl = renderRes.url;
       imageWidth = renderRes.width || 1000;
       imageHeight = renderRes.height || 1000;
+      renderedSessionId = sessionId;
+      renderedPage = currentPage;
+      renderedDpi = currentDpi;
     } catch (err) {
       const msg = typeof err === "string" ? err : err?.message || String(err);
       errorMsg = `Failed to load PDF page image: ${msg}`;
     } finally {
-      loading = false;
+      isImageLoading = false;
     }
   }
 
   async function executeDslQuery() {
-    loading = true;
+    if (isExecuting) return;
+    isExecuting = true;
     errorMsg = "";
     dslCompileResponseJson = null;
 
     try {
-      if (sessionId) {
-        await loadRawPageImage().catch((err) => {
-          console.warn("[PDFExtractor] loadRawPageImage error:", err);
-        });
-      }
+      const needsRender =
+        Boolean(sessionId) &&
+        (!imageUrl ||
+          renderedSessionId !== sessionId ||
+          renderedPage !== currentPage ||
+          renderedDpi !== currentDpi);
 
-      const data = sessionId
-        ? await activeProvider.executeDsl(sessionId, dslBodyText)
-        : await activeProvider.compileDsl(dslBodyText);
+      const renderPromise = needsRender
+        ? loadRawPageImage().catch((err) => {
+            console.warn("[PDFExtractor] renderPage error:", err);
+          })
+        : Promise.resolve();
+
+      const dslPromise = sessionId
+        ? activeProvider.executeDsl(sessionId, dslBodyText)
+        : activeProvider.compileDsl(dslBodyText);
+
+      const [_, data] = await Promise.all([renderPromise, dslPromise]);
 
       dslCompileResponseJson = data;
 
       if (data.pdf_width && data.pdf_height) {
         pdfWidth = data.pdf_width;
         pdfHeight = data.pdf_height;
-      }
-
-      if (sessionId && !imageUrl) {
-        await loadRawPageImage().catch(() => {});
       }
 
       if (!data.success && (data.error || data.errmsg)) {
@@ -269,7 +279,7 @@
         results: executeResponseJson,
       };
     } finally {
-      loading = false;
+      isExecuting = false;
     }
   }
 
@@ -287,34 +297,25 @@
       window.addEventListener("keydown", handleKeyDown);
     }
 
-    updateLayoutWidth();
-    let observer = null;
-    if (typeof ResizeObserver !== "undefined" && rightPaneElement) {
-      observer = new ResizeObserver(() => updateLayoutWidth());
-      observer.observe(rightPaneElement);
-    }
-
     return () => {
       if (typeof window !== "undefined") {
         window.removeEventListener("keydown", handleKeyDown);
       }
-      if (observer) observer.disconnect();
     };
   });
 
+  let saveDslTimeout = null;
   $effect(() => {
     if (isInitialized && dslBodyText && typeof localStorage !== "undefined") {
-      try {
-        localStorage.setItem(STORAGE_KEY_DSL, dslBodyText);
-      } catch (e) {}
+      clearTimeout(saveDslTimeout);
+      saveDslTimeout = setTimeout(() => {
+        try {
+          localStorage.setItem(STORAGE_KEY_DSL, dslBodyText);
+        } catch (e) {}
+      }, 500);
     }
   });
 
-  $effect(() => {
-    if (sessionId && currentPage !== undefined && activeProvider) {
-      loadRawPageImage();
-    }
-  });
 </script>
 
 <div
@@ -340,7 +341,6 @@
       minLeftPx={300}
       minRightPx={350}
       storageKey="pdf_extractor_left_width"
-      onresize={updateLayoutWidth}
     >
       <!-- LEFT COLUMN: Top (DSL Editor) + Bottom (AST/Plan Output) Split -->
       {#snippet left()}
@@ -356,9 +356,9 @@
               <PDFEditorPane
                 bind:dslBodyText
                 {saveNotification}
-                {loading}
+                loading={isExecuting || wasmInitializing}
                 onsave={saveCurrentConfig}
-                onexecute={handleCompileOrExecute}
+                onexecute={executeDslQuery}
               />
             {/snippet}
 

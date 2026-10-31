@@ -29,6 +29,7 @@ export class ServerPdfProvider implements PdfProvider {
     fileOrPath: File | string,
     config: any = {}
   ): Promise<{ session: SessionRecord; page_count: number }> {
+    let data: any;
     if (typeof fileOrPath === 'string') {
       const res = await fetch(`${this.baseUrl}/api/sessions`, {
         method: 'POST',
@@ -36,18 +37,31 @@ export class ServerPdfProvider implements PdfProvider {
         body: JSON.stringify({ file_path: fileOrPath, config }),
       });
       if (!res.ok) throw new Error(`HTTP ${res.status}: ${res.statusText}`);
-      return await res.json();
+      data = await res.json();
     } else {
       const formData = new FormData();
       formData.append('file', fileOrPath);
       formData.append('config', JSON.stringify(config));
-      const res = await fetch(`${this.baseUrl}/api/sessions`, {
+      const res = await fetch(`${this.baseUrl}/api/sessions/upload`, {
         method: 'POST',
         body: formData,
       });
       if (!res.ok) throw new Error(`HTTP ${res.status}: ${res.statusText}`);
-      return await res.json();
+      data = await res.json();
     }
+
+    const now = new Date().toISOString();
+    return {
+      session: {
+        id: data.session?.id || data.session_id || data.id,
+        file_path: data.session?.file_path || data.file_path || (typeof fileOrPath === 'string' ? fileOrPath : fileOrPath.name),
+        status: data.session?.status || data.status || 'ready',
+        created_at: data.session?.created_at || data.created_at || now,
+        updated_at: data.session?.updated_at || data.updated_at || now,
+        config: data.session?.config || data.config || config,
+      },
+      page_count: data.page_count ?? 1,
+    };
   }
 
   async deleteSession(id: string): Promise<boolean> {

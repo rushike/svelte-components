@@ -4,7 +4,11 @@
     getItemLabel,
     getItemBBox,
     isSublayerChecked,
+    isTableItem,
+    getTableElements,
+    getElementText,
   } from "./pdfExtractorConstants";
+  import { normalizeLayerItems } from "./pdfExtractorService";
 
   let {
     availableLayers = $bindable([]),
@@ -29,6 +33,15 @@
     tables: false,
   });
 
+  let expandedTableSections = $state({});
+
+  function toggleTableSection(secKey) {
+    expandedTableSections = {
+      ...expandedTableSections,
+      [secKey]: !expandedTableSections[secKey],
+    };
+  }
+
   function toggleLayerTree(layerKey) {
     expandedLayerTree = {
       ...expandedLayerTree,
@@ -46,10 +59,11 @@
   }
 
   function toggleAllSublayers(layerKey, visible) {
-    const items =
+    const rawVal =
       executeResponseJson?.[layerKey] ||
       dslCompileResponseJson?.results?.[layerKey];
-    if (!Array.isArray(items)) return;
+    const items = normalizeLayerItems(rawVal);
+    if (!items || items.length === 0) return;
     const nextMap = { ...(sublayerVisibility[layerKey] || {}) };
     items.forEach((_, idx) => {
       nextMap[idx] = visible;
@@ -147,8 +161,9 @@
         </div>
       {:else}
         {#each availableLayers as layerKey, index}
-          {@const items = executeResponseJson?.[layerKey]}
-          {@const isArray = Array.isArray(items) && items.length > 0}
+          {@const items = normalizeLayerItems(executeResponseJson?.[layerKey])}
+          {@const hasItems = items.length > 0}
+          {@const isExpandable = items.length > 1 || (items.length === 1 && (items[0].rows || items[0].texts))}
           <div
             role="listitem"
             draggable="true"
@@ -219,7 +234,7 @@
                   ▼
                 </button>
 
-                {#if isArray}
+                {#if hasItems}
                   <button
                     onclick={() => toggleLayerTree(layerKey)}
                     class="text-slate-400 hover:text-white text-xs px-1.5 py-0.5 rounded hover:bg-slate-800 font-mono ml-1"
@@ -231,8 +246,8 @@
               </div>
             </div>
 
-            <!-- Nested Sub-layers List for each item / photo in array -->
-            {#if isArray && expandedLayerTree[layerKey]}
+            <!-- Nested Sub-layers List for each item / photo in array or single object -->
+            {#if hasItems && expandedLayerTree[layerKey]}
               <div
                 class="border-t border-slate-800/80 bg-slate-900/50 p-2 space-y-1.5"
               >
@@ -255,80 +270,267 @@
                   </div>
                 </div>
 
-                <div class="space-y-1 max-h-56 overflow-y-auto pr-1">
+                <div class="space-y-1.5 max-h-72 overflow-y-auto pr-1">
                   {#each items as item, idx}
+                    {@const isTable = isTableItem(item)}
                     {@const isPhoto =
                       item.data_base64 || item.data || layerKey === "images"}
-                    <label
-                      class="flex items-center justify-between p-1.5 rounded hover:bg-slate-800/80 cursor-pointer transition text-xs font-mono text-slate-200 border {hoveredItem?.item ===
-                      item
-                        ? 'bg-indigo-950/80 border-indigo-600'
-                        : 'border-slate-800/60 bg-slate-950/60'}"
-                      onmouseenter={() =>
-                        (hoveredItem = {
-                          type: layerKey,
-                          text:
-                            item.text || (isPhoto ? `Photo #${idx + 1}` : ""),
-                          bbox: getItemBBox(item),
-                          id: idx + 1,
-                          item: item,
-                        })}
-                      onmouseleave={() => (hoveredItem = null)}
-                    >
-                      <div class="flex items-center space-x-2 truncate">
-                        <input
-                          type="checkbox"
-                          checked={isSublayerChecked(
-                            layerKey,
-                            idx,
-                            sublayerVisibility,
-                          )}
-                          onclick={(e) => e.stopPropagation()}
-                          onchange={(e) =>
-                            setSublayerVisible(
+
+                    {#if isTable}
+                      {@const tbl = getTableElements(item)}
+                      {@const tableSecKey = `${layerKey}_${idx}`}
+                      {@const isSecExpanded = expandedTableSections[tableSecKey] !== false}
+                      <div class="bg-slate-900/90 rounded border border-indigo-900/60 p-1.5 space-y-1">
+                        <!-- Table Node Header -->
+                        <div
+                          class="flex items-center justify-between p-1 rounded hover:bg-slate-800/80 cursor-pointer transition text-xs font-mono {hoveredItem?.item === item ? 'bg-indigo-950/80 ring-1 ring-indigo-500' : ''}"
+                          onmouseenter={() =>
+                            (hoveredItem = {
+                              type: "table",
+                              text: `Table #${item.id || idx + 1} (${tbl.rows.length} rows, ${tbl.columns.length} columns)`,
+                              bbox: tbl.bbox,
+                              id: item.id || idx + 1,
+                              item: item,
+                            })}
+                          onmouseleave={() => (hoveredItem = null)}
+                        >
+                          <div class="flex items-center space-x-1.5 truncate">
+                            <input
+                              type="checkbox"
+                              checked={isSublayerChecked(layerKey, `${idx}_table`, sublayerVisibility)}
+                              onclick={(e) => e.stopPropagation()}
+                              onchange={(e) =>
+                                setSublayerVisible(layerKey, `${idx}_table`, e.currentTarget.checked)}
+                              class="accent-indigo-500 rounded cursor-pointer"
+                              title="Toggle Table BBox"
+                            />
+                            <span class="font-bold text-indigo-300 truncate">
+                              {getItemLabel(layerKey, item, idx)}
+                            </span>
+                          </div>
+                          <div class="flex items-center space-x-1 shrink-0">
+                            <span class="text-[9px] text-slate-400">
+                              {Math.round(tbl.bbox.width)}×{Math.round(tbl.bbox.height)}
+                            </span>
+                            <button
+                              onclick={() => toggleTableSection(tableSecKey)}
+                              class="text-slate-400 hover:text-white px-1 py-0.5 rounded text-[10px] hover:bg-slate-800"
+                              title="Toggle Structure Elements"
+                            >
+                              {isSecExpanded ? "▼" : "▶"}
+                            </button>
+                          </div>
+                        </div>
+
+                        {#if isSecExpanded}
+                          <div class="pl-2.5 border-l border-indigo-900/40 space-y-1 text-[11px]">
+                            <!-- Columns Section -->
+                            {#if tbl.columns.length > 0}
+                              {@const colsSecKey = `${tableSecKey}_cols`}
+                              {@const colsExpanded = expandedTableSections[colsSecKey] !== false}
+                              <div class="space-y-0.5">
+                                <div class="flex items-center justify-between py-0.5 text-[10px] text-amber-400 font-semibold">
+                                  <label class="flex items-center space-x-1 cursor-pointer">
+                                    <input
+                                      type="checkbox"
+                                      checked={isSublayerChecked(layerKey, `${idx}_columns`, sublayerVisibility)}
+                                      onclick={(e) => e.stopPropagation()}
+                                      onchange={(e) =>
+                                        setSublayerVisible(layerKey, `${idx}_columns`, e.currentTarget.checked)}
+                                      class="accent-amber-500 rounded cursor-pointer"
+                                    />
+                                    <span>Columns ({tbl.columns.length})</span>
+                                  </label>
+                                  <button
+                                    onclick={() => toggleTableSection(colsSecKey)}
+                                    class="text-slate-400 hover:text-white px-1 text-[9px]"
+                                  >
+                                    {colsExpanded ? "▼" : "▶"}
+                                  </button>
+                                </div>
+
+                                {#if colsExpanded}
+                                  <div class="pl-2 space-y-0.5 max-h-28 overflow-y-auto">
+                                    {#each tbl.columns as col, colIdx}
+                                      {@const cb = getItemBBox(col)}
+                                      <label
+                                        class="flex items-center justify-between p-1 rounded hover:bg-slate-800/60 cursor-pointer text-[10px] {hoveredItem?.item === col ? 'bg-amber-950/70 text-amber-200' : 'text-slate-300'}"
+                                        onmouseenter={() =>
+                                          (hoveredItem = {
+                                            type: "table_column",
+                                            text: `Column #${col.id || colIdx + 1}: ${getElementText(col) || `Col ${colIdx + 1}`}`,
+                                            bbox: cb,
+                                            id: col.id || colIdx + 1,
+                                            item: col,
+                                            tableParent: item,
+                                          })}
+                                        onmouseleave={() => (hoveredItem = null)}
+                                      >
+                                        <div class="flex items-center space-x-1.5 truncate">
+                                          <input
+                                            type="checkbox"
+                                            checked={isSublayerChecked(layerKey, `${idx}_col_${colIdx}`, sublayerVisibility)}
+                                            onclick={(e) => e.stopPropagation()}
+                                            onchange={(e) =>
+                                              setSublayerVisible(layerKey, `${idx}_col_${colIdx}`, e.currentTarget.checked)}
+                                            class="accent-amber-500 rounded cursor-pointer"
+                                          />
+                                          <span class="truncate">
+                                            #{col.id || colIdx + 1} {getElementText(col) ? `("${getElementText(col).slice(0, 14)}")` : `Col ${colIdx + 1}`}
+                                          </span>
+                                        </div>
+                                        <span class="text-[9px] text-slate-500 shrink-0 pl-1">{Math.round(cb.width)}pt</span>
+                                      </label>
+                                    {/each}
+                                  </div>
+                                {/if}
+                              </div>
+                            {/if}
+
+                            <!-- Rows Section -->
+                            {#if tbl.rows.length > 0}
+                              {@const rowsSecKey = `${tableSecKey}_rows`}
+                              {@const rowsExpanded = expandedTableSections[rowsSecKey] !== false}
+                              <div class="space-y-0.5 pt-1 border-t border-slate-800/50">
+                                <div class="flex items-center justify-between py-0.5 text-[10px] text-purple-400 font-semibold">
+                                  <label class="flex items-center space-x-1 cursor-pointer">
+                                    <input
+                                      type="checkbox"
+                                      checked={isSublayerChecked(layerKey, `${idx}_rows`, sublayerVisibility)}
+                                      onclick={(e) => e.stopPropagation()}
+                                      onchange={(e) =>
+                                        setSublayerVisible(layerKey, `${idx}_rows`, e.currentTarget.checked)}
+                                      class="accent-purple-500 rounded cursor-pointer"
+                                    />
+                                    <span>Rows ({tbl.rows.length})</span>
+                                  </label>
+                                  <button
+                                    onclick={() => toggleTableSection(rowsSecKey)}
+                                    class="text-slate-400 hover:text-white px-1 text-[9px]"
+                                  >
+                                    {rowsExpanded ? "▼" : "▶"}
+                                  </button>
+                                </div>
+
+                                {#if rowsExpanded}
+                                  <div class="pl-2 space-y-0.5 max-h-36 overflow-y-auto">
+                                    {#each tbl.rows as row, rowIdx}
+                                      {@const rb = getItemBBox(row)}
+                                      {@const isHeader = Boolean(row.is_header || row.header || (rowIdx === 0 && row.is_header !== false && tbl.rows[0]?.is_header))}
+                                      <label
+                                        class="flex items-center justify-between p-1 rounded hover:bg-slate-800/60 cursor-pointer text-[10px] {hoveredItem?.item === row ? 'bg-purple-950/70 text-purple-200' : 'text-slate-300'}"
+                                        onmouseenter={() =>
+                                          (hoveredItem = {
+                                            type: isHeader ? "table_header" : "table_row",
+                                            text: `${isHeader ? "Header " : ""}Row #${row.id || rowIdx + 1}: ${getElementText(row)}`,
+                                            bbox: rb,
+                                            id: row.id || rowIdx + 1,
+                                            item: row,
+                                            tableParent: item,
+                                          })}
+                                        onmouseleave={() => (hoveredItem = null)}
+                                      >
+                                        <div class="flex items-center space-x-1.5 truncate">
+                                          <input
+                                            type="checkbox"
+                                            checked={isSublayerChecked(layerKey, `${idx}_row_${rowIdx}`, sublayerVisibility)}
+                                            onclick={(e) => e.stopPropagation()}
+                                            onchange={(e) =>
+                                              setSublayerVisible(layerKey, `${idx}_row_${rowIdx}`, e.currentTarget.checked)}
+                                            class="{isHeader ? 'accent-emerald-500' : 'accent-purple-500'} rounded cursor-pointer"
+                                          />
+                                          {#if isHeader}
+                                            <span class="text-[9px] px-1 py-0.2 rounded bg-emerald-950 text-emerald-400 border border-emerald-800/70 font-sans font-bold">
+                                              HDR
+                                            </span>
+                                          {/if}
+                                          <span class="truncate {isHeader ? 'text-emerald-300 font-semibold' : ''}">
+                                            #{row.id || rowIdx + 1} {getElementText(row) ? `("${getElementText(row).slice(0, 15)}")` : `Row ${rowIdx + 1}`}
+                                          </span>
+                                        </div>
+                                        <span class="text-[9px] text-slate-500 shrink-0 pl-1">{Math.round(rb.height)}pt</span>
+                                      </label>
+                                    {/each}
+                                  </div>
+                                {/if}
+                              </div>
+                            {/if}
+                          </div>
+                        {/if}
+                      </div>
+
+                    {:else}
+                      <label
+                        class="flex items-center justify-between p-1.5 rounded hover:bg-slate-800/80 cursor-pointer transition text-xs font-mono text-slate-200 border {hoveredItem?.item ===
+                        item
+                          ? 'bg-indigo-950/80 border-indigo-600'
+                          : 'border-slate-800/60 bg-slate-950/60'}"
+                        onmouseenter={() =>
+                          (hoveredItem = {
+                            type: layerKey,
+                            text:
+                              item.text || (isPhoto ? `Photo #${idx + 1}` : ""),
+                            bbox: getItemBBox(item),
+                            id: idx + 1,
+                            item: item,
+                          })}
+                        onmouseleave={() => (hoveredItem = null)}
+                      >
+                        <div class="flex items-center space-x-2 truncate">
+                          <input
+                            type="checkbox"
+                            checked={isSublayerChecked(
                               layerKey,
                               idx,
-                              e.currentTarget.checked,
+                              sublayerVisibility,
                             )}
-                          class="accent-indigo-500 rounded cursor-pointer"
-                        />
-                        {#if item.data_base64 || item.data}
-                          <img
-                            src={item.data_base64 || item.data}
-                            alt="Preview"
-                            class="w-5 h-5 object-cover rounded border border-slate-700 shrink-0 bg-slate-900"
+                            onclick={(e) => e.stopPropagation()}
+                            onchange={(e) =>
+                              setSublayerVisible(
+                                layerKey,
+                                idx,
+                                e.currentTarget.checked,
+                              )}
+                            class="accent-indigo-500 rounded cursor-pointer"
                           />
-                        {/if}
-                        <span
-                          class="font-semibold truncate {isPhoto
-                            ? 'text-blue-300'
-                            : layerKey === 'lines'
-                              ? 'text-teal-300'
-                              : 'text-slate-200'}"
-                        >
-                          {getItemLabel(layerKey, item, idx)}
+                          {#if item.data_base64 || item.data}
+                            <img
+                              src={item.data_base64 || item.data}
+                              alt="Preview"
+                              class="w-5 h-5 object-cover rounded border border-slate-700 shrink-0 bg-slate-900"
+                            />
+                          {/if}
+                          <span
+                            class="font-semibold truncate {isPhoto
+                              ? 'text-blue-300'
+                              : layerKey === 'lines'
+                                ? 'text-teal-300'
+                                : 'text-slate-200'}"
+                          >
+                            {getItemLabel(layerKey, item, idx)}
+                          </span>
+                        </div>
+                        <span class="text-[9px] text-slate-400 shrink-0 pl-1">
+                          {#if layerKey === "lines" || item.orientation || item.start}
+                            {@const len = Math.round(
+                              item.orientation === "Horizontal"
+                                ? getItemBBox(item).width
+                                : item.orientation === "Vertical"
+                                  ? getItemBBox(item).height
+                                  : Math.hypot(
+                                      getItemBBox(item).width,
+                                      getItemBBox(item).height,
+                                    ),
+                            )}
+                            {len}pt
+                          {:else}
+                            {Math.round(getItemBBox(item).width)}×{Math.round(
+                              getItemBBox(item).height,
+                            )}
+                          {/if}
                         </span>
-                      </div>
-                      <span class="text-[9px] text-slate-400 shrink-0 pl-1">
-                        {#if layerKey === "lines" || item.orientation || item.start}
-                          {@const len = Math.round(
-                            item.orientation === "Horizontal"
-                              ? getItemBBox(item).width
-                              : item.orientation === "Vertical"
-                                ? getItemBBox(item).height
-                                : Math.hypot(
-                                    getItemBBox(item).width,
-                                    getItemBBox(item).height,
-                                  ),
-                          )}
-                          {len}pt
-                        {:else}
-                          {Math.round(getItemBBox(item).width)}×{Math.round(
-                            getItemBBox(item).height,
-                          )}
-                        {/if}
-                      </span>
-                    </label>
+                      </label>
+                    {/if}
                   {/each}
                 </div>
               </div>

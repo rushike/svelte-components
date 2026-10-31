@@ -3,7 +3,11 @@
     getLayerStyle,
     getItemBBox,
     isSublayerVisible,
+    isTableItem,
+    getTableElements,
+    getElementText,
   } from "./pdfExtractorConstants";
+  import { normalizeLayerItems } from "./pdfExtractorService";
 
   let {
     imageUrl = null,
@@ -39,14 +43,7 @@
     }
   }
 
-  function updateLayoutWidth() {
-    if (rightPaneElement) {
-      layoutWindowWidth = rightPaneElement.clientWidth || 800;
-    }
-  }
-
   function fitToLayoutWidth() {
-    updateLayoutWidth();
     const bw = pdfWidth || imageWidth || 612;
     if (layoutWindowWidth > 60 && bw > 0) {
       const availableW = layoutWindowWidth - 48;
@@ -57,6 +54,7 @@
 
 <div
   bind:this={rightPaneElement}
+  bind:clientWidth={layoutWindowWidth}
   class="bg-slate-950 flex flex-col h-full w-full overflow-hidden relative"
 >
   <!-- Top View Control Bar -->
@@ -75,6 +73,7 @@
       {:else}
         {#each availableLayers as layer, i}
           {#if activeLayers[layer]}
+            {@const layerItems = normalizeLayerItems(executeResponseJson?.[layer])}
             <span
               class="text-[10px] font-mono px-2 py-0.5 rounded border border-slate-700 bg-slate-950 flex items-center space-x-1 {getLayerStyle(
                 layer,
@@ -82,7 +81,7 @@
             >
               <span class="text-[9px] text-slate-500 font-sans">#{i + 1}</span>
               <span
-                >● {layer} ({executeResponseJson?.[layer]?.length || 0})</span
+                >● {layer} ({layerItems.length})</span
               >
             </span>
           {/if}
@@ -182,8 +181,9 @@
             preserveAspectRatio="none"
           >
             {#each renderOrderLayers as layerKey}
-              {#if activeLayers[layerKey] && executeResponseJson && executeResponseJson[layerKey]}
-                {#each executeResponseJson[layerKey] as item, idx}
+              {@const layerItems = normalizeLayerItems(executeResponseJson?.[layerKey])}
+              {#if activeLayers[layerKey] && layerItems.length > 0}
+                {#each layerItems as item, idx}
                   {#if isSublayerVisible(layerKey, idx, sublayerVisibility, activeLayers)}
                     {@const b = getItemBBox(item)}
                     {@const isLine =
@@ -192,7 +192,131 @@
                       (item.start && item.end) ||
                       b.width === 0 ||
                       b.height === 0}
-                    {#if item.data_base64 || item.data}
+                    {@const isTable = isTableItem(item)}
+
+                    {#if isTable}
+                      {@const tbl = getTableElements(item)}
+
+                      <!-- 1. Very light Table Outer BBox Background -->
+                      {#if isSublayerVisible(layerKey, `${idx}_table`, sublayerVisibility, activeLayers)}
+                        <rect
+                          x={tbl.bbox.x}
+                          y={tbl.bbox.y}
+                          width={tbl.bbox.width}
+                          height={tbl.bbox.height}
+                          fill={hoveredItem && (hoveredItem.item === item || hoveredItem.tableParent === item)
+                            ? "rgba(99, 102, 241, 0.12)"
+                            : "rgba(99, 102, 241, 0.03)"}
+                          stroke={globalStrokeColor ||
+                            (hoveredItem && (hoveredItem.item === item || hoveredItem.tableParent === item)
+                              ? "#818cf8"
+                              : "rgba(99, 102, 241, 0.45)")}
+                          stroke-width={hoveredItem && (hoveredItem.item === item || hoveredItem.tableParent === item)
+                            ? strokeWidth + 1
+                            : strokeWidth}
+                          stroke-dasharray="6 3"
+                          vector-effect="non-scaling-stroke"
+                          role="presentation"
+                          class="cursor-pointer transition-colors duration-150"
+                          onmouseenter={() =>
+                            (hoveredItem = {
+                              type: "table",
+                              text: `Table #${item.id || idx + 1} (${tbl.rows.length} rows, ${tbl.columns.length} columns)`,
+                              bbox: tbl.bbox,
+                              id: item.id || idx + 1,
+                              item: item,
+                            })}
+                          onmouseleave={() => (hoveredItem = null)}
+                        />
+                      {/if}
+
+                      <!-- 2. Individual Columns Bounding Boxes -->
+                      {#if isSublayerVisible(layerKey, `${idx}_columns`, sublayerVisibility, activeLayers)}
+                        {#each tbl.columns as col, colIdx}
+                          {#if isSublayerVisible(layerKey, `${idx}_col_${colIdx}`, sublayerVisibility, activeLayers)}
+                            {@const cb = getItemBBox(col)}
+                            <rect
+                              x={cb.x}
+                              y={cb.y}
+                              width={cb.width}
+                              height={cb.height}
+                              fill={hoveredItem && hoveredItem.item === col
+                                ? "rgba(245, 158, 11, 0.22)"
+                                : "rgba(245, 158, 11, 0.04)"}
+                              stroke={globalStrokeColor ||
+                                (hoveredItem && hoveredItem.item === col
+                                  ? "#fbbf24"
+                                  : "rgba(245, 158, 11, 0.5)")}
+                              stroke-width={hoveredItem && hoveredItem.item === col ? 2 : 1.2}
+                              stroke-dasharray="4 3"
+                              vector-effect="non-scaling-stroke"
+                              role="presentation"
+                              class="cursor-pointer transition-colors duration-100"
+                              onmouseenter={() =>
+                                (hoveredItem = {
+                                  type: "table_column",
+                                  text: `Column #${col.id || colIdx + 1}: ${getElementText(col) || `Col ${colIdx + 1}`}`,
+                                  bbox: cb,
+                                  id: col.id || colIdx + 1,
+                                  item: col,
+                                  tableParent: item,
+                                })}
+                              onmouseleave={() => (hoveredItem = null)}
+                            />
+                          {/if}
+                        {/each}
+                      {/if}
+
+                      <!-- 3. Individual Rows Bounding Boxes -->
+                      {#if isSublayerVisible(layerKey, `${idx}_rows`, sublayerVisibility, activeLayers)}
+                        {#each tbl.rows as row, rowIdx}
+                          {#if isSublayerVisible(layerKey, `${idx}_row_${rowIdx}`, sublayerVisibility, activeLayers)}
+                            {@const rb = getItemBBox(row)}
+                            {@const isHeader = Boolean(row.is_header || row.header || (rowIdx === 0 && row.is_header !== false && tbl.rows[0]?.is_header))}
+                            <rect
+                              x={rb.x}
+                              y={rb.y}
+                              width={rb.width}
+                              height={rb.height}
+                              fill={hoveredItem && hoveredItem.item === row
+                                ? isHeader
+                                  ? "rgba(16, 185, 129, 0.28)"
+                                  : "rgba(168, 85, 247, 0.25)"
+                                : isHeader
+                                  ? "rgba(16, 185, 129, 0.12)"
+                                  : "rgba(168, 85, 247, 0.05)"}
+                              stroke={globalStrokeColor ||
+                                (hoveredItem && hoveredItem.item === row
+                                  ? isHeader
+                                    ? "#34d399"
+                                    : "#c084fc"
+                                  : isHeader
+                                    ? "rgba(16, 185, 129, 0.75)"
+                                    : "rgba(168, 85, 247, 0.45)")}
+                              stroke-width={hoveredItem && hoveredItem.item === row
+                                ? 2
+                                : isHeader
+                                  ? 1.5
+                                  : 1.2}
+                              vector-effect="non-scaling-stroke"
+                              role="presentation"
+                              class="cursor-pointer transition-colors duration-100"
+                              onmouseenter={() =>
+                                (hoveredItem = {
+                                  type: isHeader ? "table_header" : "table_row",
+                                  text: `${isHeader ? "Header " : ""}Row #${row.id || rowIdx + 1}: ${getElementText(row)}`,
+                                  bbox: rb,
+                                  id: row.id || rowIdx + 1,
+                                  item: row,
+                                  tableParent: item,
+                                })}
+                              onmouseleave={() => (hoveredItem = null)}
+                            />
+                          {/if}
+                        {/each}
+                      {/if}
+
+                    {:else if item.data_base64 || item.data}
                       <image
                         x={b.x}
                         y={b.y}

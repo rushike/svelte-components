@@ -116,13 +116,17 @@ export async function initializeWasmEngine(): Promise<WasmPdfProvider> {
         await db.init().catch(() => {});
       }
     }
-  } catch (_) {}
+  } catch (e) {
+    console.debug("[WASM] Optional @rushike/sqlite3-client not available:", e?.message || e);
+  }
 
   try {
     const myfsModule = await import("@rushike/myfs");
     const MyFSClass = myfsModule.default || myfsModule.MyFS;
     if (MyFSClass) myfs = new MyFSClass();
-  } catch (_) {}
+  } catch (e) {
+    console.debug("[WASM] Optional @rushike/myfs not available:", e?.message || e);
+  }
 
   return new WasmPdfProvider({
     db,
@@ -154,7 +158,23 @@ const META_KEYS = new Set([
 ]);
 
 /**
+ * Normalizes a layer value into an array of drawable items.
+ * If value is already an array, returns it.
+ * If value is a non-null object with bbox / geometry / words / texts / rows, wraps it in [value].
+ */
+export function normalizeLayerItems(val: any): any[] {
+  if (!val) return [];
+  if (Array.isArray(val)) return val;
+  if (typeof val === "object") {
+    // If it's a table with rows, or an object with bbox/start/end/etc., wrap in array so it can be drawn
+    return [val];
+  }
+  return [];
+}
+
+/**
  * Synchronizes layer order and active status from a backend/WASM pipeline or DSL response.
+ * Handles both arrays (e.g. rows: [...]) and single objects (e.g. my_table: { ... }).
  */
 export function syncLayersFromResponse(
   data: Record<string, any>,
@@ -165,12 +185,11 @@ export function syncLayersFromResponse(
   activeLayers: Record<string, boolean>;
   totalNodes: number;
 } {
-  const newAvailableLayers = Object.keys(data).filter(
-    (key) =>
-      Array.isArray(data[key]) &&
-      data[key].length > 0 &&
-      !META_KEYS.has(key),
-  );
+  const newAvailableLayers = Object.keys(data).filter((key) => {
+    if (META_KEYS.has(key)) return false;
+    const items = normalizeLayerItems(data[key]);
+    return items.length > 0;
+  });
 
   // Preserve existing user-arranged drag order
   const existingSet = new Set(newAvailableLayers);
@@ -188,14 +207,14 @@ export function syncLayersFromResponse(
       currentActiveLayers[layer] !== undefined
         ? currentActiveLayers[layer]
         : true;
-    totalNodes += data[layer].length;
+    totalNodes += normalizeLayerItems(data[layer]).length;
   });
 
   return { availableLayers, activeLayers, totalNodes };
 }
 
 /**
- * Populates default sub-layer checkboxes for newly returned item arrays.
+ * Populates default sub-layer checkboxes for newly returned items (arrays or single objects).
  */
 export function buildSublayersVisibility(
   data: Record<string, any>,
@@ -203,8 +222,10 @@ export function buildSublayersVisibility(
 ): Record<string, Record<number, boolean>> {
   if (!data) return currentVisibility;
   const nextVis = { ...currentVisibility };
-  for (const [key, items] of Object.entries(data)) {
-    if (Array.isArray(items)) {
+  for (const [key, rawVal] of Object.entries(data)) {
+    if (META_KEYS.has(key)) continue;
+    const items = normalizeLayerItems(rawVal);
+    if (items.length > 0) {
       const layerMap = { ...(nextVis[key] || {}) };
       const isPhoto = key === "images" || key === "photos";
       items.forEach((_, idx) => {

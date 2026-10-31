@@ -367,7 +367,14 @@ export class WasmPdfProvider implements PdfProvider {
         try {
           const ptr = p._malloc(bytes.length);
           p.HEAPU8.set(bytes, ptr);
-          const doc = p._FPDF_LoadMemDocument(ptr, bytes.length, 0);
+          let passPtr = 0;
+          if (config?.password) {
+            const passBytes = new TextEncoder().encode(config.password + '\0');
+            passPtr = p._malloc(passBytes.length);
+            p.HEAPU8.set(passBytes, passPtr);
+          }
+          const doc = p._FPDF_LoadMemDocument(ptr, bytes.length, passPtr);
+          if (passPtr) p._free(passPtr);
           if (doc) {
             pageCount = p._FPDF_GetPageCount(doc) || 1;
             p._FPDF_CloseDocument(doc);

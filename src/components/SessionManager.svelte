@@ -45,6 +45,7 @@
   let filePathInput = $state('');
   let uploadFiles = $state<FileList | null>(null);
   let bankHint = $state('');
+  let passwordInput = $state('');
 
   async function syncEngine() {
     if (useWasm && !wasmProvider) {
@@ -128,6 +129,7 @@
     try {
       const config = {
         bank: bankHint.trim() || undefined,
+        password: passwordInput.trim() || undefined,
       };
       const prov = activeProvider;
       if (!prov) return;
@@ -150,7 +152,11 @@
     try {
       const prov = activeProvider;
       if (!prov) return;
-      const data = await prov.createSession(uploadFiles[0]);
+      const config = {
+        bank: bankHint.trim() || undefined,
+        password: passwordInput.trim() || undefined,
+      };
+      const data = await prov.createSession(uploadFiles[0], config);
       uploadFiles = null;
       await fetchSessions();
       selectSession(data.session.id);
@@ -366,7 +372,7 @@
             </div>
           </div>
 
-          <div class="flex items-center space-x-2 pt-1">
+          <div class="flex items-center space-x-4 pt-1">
             <label class="text-xs text-slate-400 flex items-center space-x-1.5">
               <span>Bank Hint (Optional):</span>
               <input
@@ -374,6 +380,16 @@
                 placeholder="e.g. sbi"
                 bind:value={bankHint}
                 class="bg-slate-900 border border-slate-700 text-xs px-2 py-1 rounded text-slate-200 focus:outline-none focus:border-indigo-500 w-28"
+              />
+            </label>
+
+            <label class="text-xs text-slate-400 flex items-center space-x-1.5">
+              <span>Password (Optional):</span>
+              <input
+                type="password"
+                placeholder="PDF Password"
+                bind:value={passwordInput}
+                class="bg-slate-900 border border-slate-700 text-xs px-2 py-1 rounded text-slate-200 focus:outline-none focus:border-indigo-500 w-36"
               />
             </label>
           </div>

@@ -50,10 +50,10 @@
         onclick={onexecute}
         disabled={loading}
         title="Execute DSL Query (⌘R / Ctrl+R)"
-        class="bg-emerald-600 hover:bg-emerald-500 disabled:opacity-50 text-white text-xs px-3 py-1 rounded font-semibold transition shadow flex items-center space-x-1.5"
+        class="bg-emerald-600 hover:bg-emerald-500 disabled:opacity-50 text-white text-xs px-3 py-1 rounded font-semibold transition shadow flex items-center space-x-1.5 cursor-pointer disabled:cursor-not-allowed"
       >
         <span>⚡</span>
-        <span>Execute Query (⌘R)</span>
+        <span>{loading ? "Executing..." : "Execute Query (⌘R)"}</span>
       </button>
     </div>
   </div>

@@ -134,8 +134,60 @@ export function getItemBBox(item: any) {
   return { x: x1, y: y1, width, height, x1, y1, x2, y2 };
 }
 
+export function getElementText(el: any): string {
+  if (!el) return "";
+  if (typeof el.text === "string") return el.text.trim();
+  if (Array.isArray(el.texts)) {
+    return el.texts.map(getElementText).filter(Boolean).join(" ");
+  }
+  if (Array.isArray(el.words)) {
+    return el.words
+      .map((w: any) => (w && w.text) || "")
+      .filter(Boolean)
+      .join(" ");
+  }
+  return "";
+}
+
+export function isTableItem(item: any): boolean {
+  if (!item || typeof item !== "object") return false;
+  return Boolean(
+    item.structure ||
+      (Array.isArray(item.rows) &&
+        item.rows.length > 0 &&
+        (item.rows[0].texts || item.rows[0].bbox)),
+  );
+}
+
+export function getTableElements(item: any): {
+  bbox: ReturnType<typeof getItemBBox>;
+  rows: any[];
+  columns: any[];
+  cells: any[];
+} {
+  const bbox = getItemBBox(item.bbox || item.structure?.bbox || item);
+  const rows =
+    Array.isArray(item.rows) && item.rows.length > 0
+      ? item.rows
+      : Array.isArray(item.structure?.rows)
+        ? item.structure.rows
+        : [];
+  const columns =
+    Array.isArray(item.structure?.columns) && item.structure.columns.length > 0
+      ? item.structure.columns
+      : Array.isArray(item.columns)
+        ? item.columns
+        : [];
+  const cells = Array.isArray(item.structure?.cells)
+    ? item.structure.cells
+    : Array.isArray(item.cells)
+      ? item.cells
+      : [];
+  return { bbox, rows, columns, cells };
+}
+
 export function getItemLabel(layerKey: string, item: any, idx: number): string {
-  if (item.text)
+  if (item.text && typeof item.text === "string")
     return `"${item.text.slice(0, 20)}${item.text.length > 20 ? "…" : ""}"`;
   if (
     layerKey === "images" ||
@@ -149,12 +201,29 @@ export function getItemLabel(layerKey: string, item: any, idx: number): string {
     const orient = item.orientation ? ` (${item.orientation})` : "";
     return `Line #${item.id || idx + 1}${orient}`;
   }
-  return `${layerKey.slice(0, -1)} #${idx + 1}`;
+  if (isTableItem(item) || layerKey.toLowerCase().includes("table")) {
+    const tbl = getTableElements(item);
+    const rowCount = tbl.rows.length;
+    const colCount = tbl.columns.length;
+    let label = `Table #${item.id || idx + 1}`;
+    if (rowCount > 0 && colCount > 0) {
+      label += ` (${rowCount}R × ${colCount}C)`;
+    } else if (rowCount > 0) {
+      label += ` (${rowCount} rows)`;
+    }
+    return label;
+  }
+  const cleanName = layerKey.endsWith("s") ? layerKey.slice(0, -1) : layerKey;
+  return `${cleanName} #${idx + 1}`;
 }
 
-export function isSublayerChecked(layerKey: string, idx: number, subVis: Record<string, Record<number, boolean>>) {
-  if (subVis && subVis[layerKey] && subVis[layerKey][idx] !== undefined) {
-    return subVis[layerKey][idx] === true;
+export function isSublayerChecked(
+  layerKey: string,
+  subKey: number | string,
+  subVis: Record<string, Record<string | number, boolean>>,
+) {
+  if (subVis && subVis[layerKey] && subVis[layerKey][subKey] !== undefined) {
+    return subVis[layerKey][subKey] === true;
   }
   const isPhoto = layerKey === "images" || layerKey === "photos";
   return isPhoto ? false : true;
@@ -162,10 +231,10 @@ export function isSublayerChecked(layerKey: string, idx: number, subVis: Record<
 
 export function isSublayerVisible(
   layerKey: string,
-  idx: number,
-  subVis: Record<string, Record<number, boolean>>,
-  actLayers: Record<string, boolean>
+  subKey: number | string,
+  subVis: Record<string, Record<string | number, boolean>>,
+  actLayers: Record<string, boolean>,
 ) {
   if (actLayers && actLayers[layerKey] === false) return false;
-  return isSublayerChecked(layerKey, idx, subVis);
+  return isSublayerChecked(layerKey, subKey, subVis);
 }
