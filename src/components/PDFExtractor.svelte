@@ -28,6 +28,7 @@
     baseUrl = "http://localhost:9191",
     provider = null,
     sessionId = null,
+    documentId = null,
     pageCount = 1,
     useWasm = $bindable(false),
   } = $props();
@@ -116,6 +117,7 @@
   let layoutWindowWidth = $state(800);
   let rightPaneElement = $state(null);
   let renderedSessionId = $state(null);
+  let renderedDocumentId = $state(null);
   let renderedPage = $state(null);
   let renderedDpi = $state(null);
 
@@ -176,12 +178,14 @@
         currentDpi,
         targetW,
         pwd,
+        documentId,
       );
       if (imageUrl) URL.revokeObjectURL(imageUrl);
       imageUrl = renderRes.url;
       imageWidth = renderRes.width || 1000;
       imageHeight = renderRes.height || 1000;
       renderedSessionId = sessionId;
+      renderedDocumentId = documentId;
       renderedPage = currentPage;
       renderedDpi = currentDpi;
     } catch (err) {
@@ -191,6 +195,20 @@
       isImageLoading = false;
     }
   }
+
+  // React to page, DPI, session, or document change
+  $effect(() => {
+    if (sessionId && isInitialized) {
+      if (
+        renderedSessionId !== sessionId ||
+        renderedDocumentId !== documentId ||
+        renderedPage !== currentPage ||
+        renderedDpi !== currentDpi
+      ) {
+        loadRawPageImage();
+      }
+    }
+  });
 
   async function executeDslQuery() {
     if (isExecuting) return;
@@ -203,6 +221,7 @@
         Boolean(sessionId) &&
         (!imageUrl ||
           renderedSessionId !== sessionId ||
+          renderedDocumentId !== documentId ||
           renderedPage !== currentPage ||
           renderedDpi !== currentDpi);
 
@@ -213,7 +232,7 @@
         : Promise.resolve();
 
       const dslPromise = sessionId
-        ? activeProvider.executeDsl(sessionId, dslBodyText)
+          ? activeProvider.executeDsl(sessionId, dslBodyText, documentId)
         : activeProvider.compileDsl(dslBodyText);
 
       const [_, data] = await Promise.all([renderPromise, dslPromise]);

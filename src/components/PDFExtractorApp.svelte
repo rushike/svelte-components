@@ -22,6 +22,8 @@
   let activeSessionId = $state<string | null>(null);
   let activeFilePath = $state<string>('');
   let activePageCount = $state<number>(1);
+  let activeDocumentId = $state<string | null>(null);
+  let activeDocuments = $state<any[]>([]);
   let showSessionModal = $state(false);
 
   let wasmProviderInstance = $state<any>(null);
@@ -89,10 +91,11 @@
     }
   });
 
-  function handleSessionSelect(detail: { id: string; file_path: string; page_count: number }) {
+  function handleSessionSelect(detail: { id: string; file_path: string; page_count: number; document_id?: string | null }) {
     activeSessionId = detail.id;
     activeFilePath = detail.file_path;
     activePageCount = detail.page_count;
+    activeDocumentId = detail.document_id || null;
   }
 </script>
 
@@ -105,6 +108,8 @@
     bind:activeSessionId
     bind:activeFilePath
     bind:activePageCount
+    bind:activeDocumentId
+    bind:activeDocuments
     bind:showModal={showSessionModal}
     on:select={(e) => handleSessionSelect(e.detail)}
   />
@@ -118,6 +123,7 @@
         bind:useWasm
         sessionId={activeSessionId}
         pageCount={activePageCount}
+        documentId={activeDocumentId}
       />
     {:else}
       <div class="bg-slate-900 border border-slate-800 rounded-lg p-16 text-center text-slate-400 shadow-xl space-y-4 m-auto max-w-lg">

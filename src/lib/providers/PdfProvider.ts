@@ -1,3 +1,9 @@
+export interface SessionDocument {
+  id: string;
+  file_path: string;
+  name: string;
+}
+
 export interface SessionRecord {
   id: string;
   file_path: string;
@@ -5,6 +11,8 @@ export interface SessionRecord {
   created_at: string | number;
   updated_at: string | number;
   config?: any;
+  documents?: SessionDocument[];
+  active_document_id?: string | null;
 }
 
 export interface DslExecutionResult {
@@ -38,17 +46,22 @@ export interface PdfProvider {
   listSessions(): Promise<SessionRecord[]>;
   getSession(id: string): Promise<{ session: SessionRecord; page_count: number }>;
   createSession(
-    fileOrPath: File | string,
+    fileOrPath: File | string | (File | string)[],
     config?: any
   ): Promise<{ session: SessionRecord; page_count: number }>;
+  addSessionFile(sessionId: string, file: File | string): Promise<SessionDocument>;
+  addSessionFiles(sessionId: string, files: (File | string)[]): Promise<SessionDocument[]>;
+  activateSessionFile(sessionId: string, documentId: string): Promise<{ session: SessionRecord; page_count: number }>;
+  deleteSessionFile(sessionId: string, documentId: string): Promise<{ session: SessionRecord; page_count: number }>;
   deleteSession(id: string): Promise<boolean>;
-  executeDsl(sessionId: string, code: string): Promise<DslExecutionResult>;
+  executeDsl(sessionId: string, code: string, documentId?: string): Promise<DslExecutionResult>;
   compileDsl(code: string): Promise<any>;
   renderPage(
     sessionId: string,
     page: number,
     dpi?: number,
     targetWidth?: number,
-    password?: string
+    password?: string,
+    documentId?: string
   ): Promise<RenderResult>;
 }

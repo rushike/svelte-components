@@ -1,6 +1,6 @@
 <script lang="ts">
   import { onMount, createEventDispatcher } from 'svelte';
-  import type { PdfProvider, SessionRecord } from '../lib/providers';
+  import type { PdfProvider, SessionRecord, SessionDocument } from '../lib/providers';
   import { ServerPdfProvider, WasmPdfProvider } from '../lib/providers';
   import { getOrInitWasmEngine } from './pdf-extractor/pdfExtractorService';
   import {
@@ -15,6 +15,8 @@
     activeSessionId = $bindable(null),
     activeFilePath = $bindable(''),
     activePageCount = $bindable(1),
+    activeDocumentId = $bindable(null),
+    activeDocuments = $bindable<SessionDocument[]>([]),
     showModal = $bindable(false),
   }: {
     baseUrl?: string;
@@ -23,6 +25,8 @@
     activeSessionId?: string | null;
     activeFilePath?: string;
     activePageCount?: number;
+    activeDocumentId?: string | null;
+    activeDocuments?: SessionDocument[];
     showModal?: boolean;
   } = $props();
 
@@ -34,7 +38,7 @@
   );
 
   const dispatch = createEventDispatcher<{
-    select: { id: string; file_path: string; page_count: number };
+    select: { id: string; file_path: string; page_count: number; document_id?: string | null };
     create: { id: string };
     delete: { id: string };
   }>();
@@ -106,6 +110,8 @@
       const data = await prov.getSession(id);
       activeFilePath = data.session.file_path || '';
       activePageCount = data.page_count || 1;
+      activeDocuments = data.session.config?.documents || data.session.documents || [];
+      activeDocumentId = data.session.config?.active_document_id || activeDocuments[0]?.id || null;
       if (typeof localStorage !== 'undefined') {
         localStorage.setItem(getActiveSessionStorageKey(useWasm), id);
       }
@@ -113,12 +119,26 @@
         id: data.session.id,
         file_path: activeFilePath,
         page_count: activePageCount,
+        document_id: activeDocumentId,
       });
       showModal = false;
     } catch (err: any) {
       errorMsg = `Failed to select session ${id}: ${err.message}`;
     } finally {
       loading = false;
+    }
+  }
+
+  let copiedSnippet = $state('');
+
+  function copyLoadSnippet(name: string) {
+    const snippet = `LOAD "${name}" AS doc`;
+    if (typeof navigator !== 'undefined' && navigator.clipboard) {
+      navigator.clipboard.writeText(snippet);
+      copiedSnippet = name;
+      setTimeout(() => {
+        if (copiedSnippet === name) copiedSnippet = '';
+      }, 2000);
     }
   }
 
@@ -133,7 +153,20 @@
       };
       const prov = activeProvider;
       if (!prov) return;
-      const data = await prov.createSession(filePathInput.trim(), config);
+      const paths = filePathInput
+        .split(/[\n,]+/)
+        .map((p) => p.trim())
+        .filter(Boolean);
+
+      if (paths.length === 0) return;
+
+      if (activeSessionId) {
+        await prov.addSessionFiles(activeSessionId, paths);
+        filePathInput = '';
+        await selectSession(activeSessionId);
+        return;
+      }
+      const data = await prov.createSession(paths.length === 1 ? paths[0] : paths, config);
       filePathInput = '';
       await fetchSessions();
       selectSession(data.session.id);
@@ -156,13 +189,51 @@
         bank: bankHint.trim() || undefined,
         password: passwordInput.trim() || undefined,
       };
-      const data = await prov.createSession(uploadFiles[0], config);
+      const filesArray = Array.from(uploadFiles);
+      if (activeSessionId) {
+        await prov.addSessionFiles(activeSessionId, filesArray);
+        uploadFiles = null;
+        await selectSession(activeSessionId);
+        return;
+      }
+      const data = await prov.createSession(filesArray.length === 1 ? filesArray[0] : filesArray, config);
       uploadFiles = null;
       await fetchSessions();
       selectSession(data.session.id);
       dispatch('create', { id: data.session.id });
     } catch (err: any) {
-      errorMsg = `Failed to upload file: ${err.message}`;
+      errorMsg = `Failed to upload file(s): ${err.message}`;
+    } finally {
+      loading = false;
+    }
+  }
+
+  async function activateDocument(documentId: string) {
+    if (!activeSessionId) return;
+    loading = true;
+    try {
+      const data = await activeProvider.activateSessionFile(activeSessionId, documentId);
+      await selectSession(data.session.id);
+    } catch (err: any) {
+      errorMsg = `Failed to select PDF: ${err.message}`;
+    } finally {
+      loading = false;
+    }
+  }
+
+  async function removeDocument(documentId: string, e: MouseEvent) {
+    e.stopPropagation();
+    if (!activeSessionId) return;
+    if (activeDocuments.length <= 1) {
+      errorMsg = 'Cannot remove the only PDF in a session.';
+      return;
+    }
+    loading = true;
+    try {
+      const data = await activeProvider.deleteSessionFile(activeSessionId, documentId);
+      await selectSession(data.session.id);
+    } catch (err: any) {
+      errorMsg = `Failed to remove PDF: ${err.message}`;
     } finally {
       loading = false;
     }
@@ -324,7 +395,7 @@
         <!-- Create & Upload Forms -->
         <div class="bg-slate-950 border border-slate-800 p-3.5 rounded-lg space-y-3">
           <div class="text-xs font-semibold text-indigo-300 uppercase tracking-wider flex items-center justify-between">
-            <span>Create / Open New Session</span>
+            <span>{activeSessionId ? 'Add PDF to Session' : 'Create / Open New Session'}</span>
             <span class="text-[11px] text-slate-500 font-normal">Target: {useWasm ? 'Client WASM OPFS DB' : 'Server API'}</span>
           </div>
           
@@ -353,11 +424,14 @@
 
             <!-- Upload File -->
             <div class="space-y-1">
-              <label class="text-xs text-slate-400 block font-medium">Upload PDF File:</label>
+              <label class="text-xs text-slate-400 block font-medium">
+                {activeSessionId ? 'Attach PDF File(s):' : 'Upload PDF File(s):'}
+              </label>
               <div class="flex space-x-1.5">
                 <input
                   type="file"
                   accept=".pdf"
+                  multiple
                   onchange={(e) => (uploadFiles = (e.currentTarget as HTMLInputElement).files)}
                   class="flex-1 text-xs text-slate-400 file:mr-2 file:py-1 file:px-2 file:rounded file:border-0 file:text-xs file:font-semibold file:bg-slate-800 file:text-slate-300 hover:file:bg-slate-700 cursor-pointer"
                 />
@@ -366,7 +440,9 @@
                   disabled={!uploadFiles || uploadFiles.length === 0 || loading}
                   class="bg-emerald-600 hover:bg-emerald-500 disabled:opacity-50 text-white text-xs px-3 rounded font-medium transition"
                 >
-                  Upload
+                  {activeSessionId
+                    ? (uploadFiles && uploadFiles.length > 1 ? `Attach (${uploadFiles.length})` : 'Attach')
+                    : (uploadFiles && uploadFiles.length > 1 ? `Upload (${uploadFiles.length})` : 'Upload')}
                 </button>
               </div>
             </div>
@@ -393,6 +469,59 @@
               />
             </label>
           </div>
+
+          {#if activeSessionId && activeDocuments.length > 0}
+            <div class="bg-slate-950 border border-slate-800 p-3 rounded-lg space-y-2.5">
+              <div class="flex items-center justify-between">
+                <div class="text-xs font-semibold text-indigo-300 uppercase tracking-wider flex items-center space-x-2">
+                  <span>🔒 Session Sandbox Files ({activeDocuments.length})</span>
+                </div>
+                <span class="text-[10px] text-slate-400">
+                  Only these files are accessible in DSL via <code>LOAD "filename"</code>
+                </span>
+              </div>
+
+              <div class="flex flex-wrap gap-2">
+                {#each activeDocuments as document (document.id)}
+                  <div
+                    class="group flex items-center space-x-1.5 text-xs px-2.5 py-1.5 rounded border transition {activeDocumentId === document.id ? 'bg-indigo-900/70 text-indigo-100 border-indigo-500 shadow-sm' : 'bg-slate-900 text-slate-300 border-slate-700 hover:border-slate-500'}"
+                  >
+                    <!-- Click to activate for viewport preview -->
+                    <button
+                      onclick={() => activateDocument(document.id)}
+                      class="flex items-center space-x-1.5 hover:text-white"
+                      title={`Preview in Canvas (${document.file_path})`}
+                    >
+                      <span class={activeDocumentId === document.id ? 'text-emerald-400' : 'text-slate-500'}>
+                        {activeDocumentId === document.id ? '👁️' : '📄'}
+                      </span>
+                      <span class="font-medium truncate max-w-[140px]">{document.name}</span>
+                    </button>
+
+                    <!-- Copy LOAD snippet button -->
+                    <button
+                      onclick={() => copyLoadSnippet(document.name)}
+                      title={`Copy: LOAD "${document.name}" AS doc`}
+                      class="ml-1 text-[10px] px-1.5 py-0.5 rounded bg-slate-800 hover:bg-indigo-600 text-slate-400 hover:text-white font-mono transition border border-slate-700"
+                    >
+                      {copiedSnippet === document.name ? '✓ Copied' : 'LOAD'}
+                    </button>
+
+                    <!-- Remove document button (if more than 1 document) -->
+                    {#if activeDocuments.length > 1}
+                      <button
+                        onclick={(e) => removeDocument(document.id, e)}
+                        title="Remove file from session"
+                        class="text-slate-500 hover:text-red-400 pl-1 font-bold transition text-xs"
+                      >
+                        ✕
+                      </button>
+                    {/if}
+                  </div>
+                {/each}
+              </div>
+            </div>
+          {/if}
         </div>
 
         <!-- Sessions Table -->
