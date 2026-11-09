@@ -14,6 +14,7 @@
     syncLayersFromResponse,
     buildSublayersVisibility,
     extractPasswordFromDsl,
+    extractLoadedFileFromDsl,
   } from "./pdf-extractor/pdfExtractorService";
 
   import PDFExtractorToolbar from "./pdf-extractor/PDFExtractorToolbar.svelte";
@@ -31,6 +32,7 @@
     documentId = null,
     pageCount = 1,
     useWasm = $bindable(false),
+    onwasmtoggle = undefined,
   } = $props();
 
   // Engine & Provider instances
@@ -48,18 +50,24 @@
   });
 
   let activeProvider = $derived(
-    provider
-      ? provider
-      : useWasm && wasmProviderInstance
-        ? wasmProviderInstance
-        : serverProviderInstance,
+    useWasm
+      ? (wasmProviderInstance || provider)
+      : (provider || serverProviderInstance),
   );
 
   $effect(() => {
-    if (useWasm && !wasmProviderInstance && !provider) {
+    if (useWasm && !wasmProviderInstance) {
       setEngineWasm(true);
     }
   });
+
+  async function handleToolbarWasmToggle(enabled) {
+    if (typeof onwasmtoggle === "function") {
+      onwasmtoggle(enabled);
+    } else {
+      await setEngineWasm(enabled);
+    }
+  }
 
   async function setEngineWasm(enabled) {
     useWasm = enabled;
@@ -89,6 +97,13 @@
   let currentDpi = $state(300);
   let strokeWidth = $state(2);
   let globalStrokeColor = $state("");
+  let toolbarPassword = $state("");
+
+  function handlePasswordChange(newPwd) {
+    toolbarPassword = newPwd;
+    lastAttemptedRenderKey = "";
+    loadRawPageImage();
+  }
 
   function getInitialDsl() {
     if (typeof localStorage !== "undefined") {
@@ -120,6 +135,7 @@
   let renderedDocumentId = $state(null);
   let renderedPage = $state(null);
   let renderedDpi = $state(null);
+  let lastAttemptedRenderKey = $state("");
 
   let isImageLoading = $state(false);
   let isExecuting = $state(false);
@@ -166,12 +182,18 @@
     if (!sessionId || isImageLoading) return;
     isImageLoading = true;
     errorMsg = "";
+    renderedSessionId = sessionId;
+    renderedDocumentId = documentId;
+    renderedPage = currentPage;
+    renderedDpi = currentDpi;
+
     try {
       const targetW =
         layoutWindowWidth > 100
           ? Math.round(layoutWindowWidth - 48)
           : undefined;
-      const pwd = extractPasswordFromDsl(dslBodyText);
+      const targetFile = extractLoadedFileFromDsl(dslBodyText);
+      const pwd = toolbarPassword || extractPasswordFromDsl(dslBodyText);
       const renderRes = await activeProvider.renderPage(
         sessionId,
         currentPage,
@@ -179,32 +201,31 @@
         targetW,
         pwd,
         documentId,
+        targetFile,
       );
       if (imageUrl) URL.revokeObjectURL(imageUrl);
       imageUrl = renderRes.url;
       imageWidth = renderRes.width || 1000;
       imageHeight = renderRes.height || 1000;
-      renderedSessionId = sessionId;
-      renderedDocumentId = documentId;
-      renderedPage = currentPage;
-      renderedDpi = currentDpi;
     } catch (err) {
       const msg = typeof err === "string" ? err : err?.message || String(err);
-      errorMsg = `Failed to load PDF page image: ${msg}`;
+      if (msg.includes("error 4") || msg.includes("PDFium error 4") || msg.includes("password-protected")) {
+        errorMsg = "Password required or incorrect password for this PDF. Enter the password in the toolbar above, or add WITH PASSWORD \"...\" in the DSL query.";
+      } else {
+        errorMsg = `Failed to load PDF page image: ${msg}`;
+      }
     } finally {
       isImageLoading = false;
     }
   }
 
-  // React to page, DPI, session, or document change
+  // React to page, DPI, session, document, or DSL file change
   $effect(() => {
     if (sessionId && isInitialized) {
-      if (
-        renderedSessionId !== sessionId ||
-        renderedDocumentId !== documentId ||
-        renderedPage !== currentPage ||
-        renderedDpi !== currentDpi
-      ) {
+      const targetFile = extractLoadedFileFromDsl(dslBodyText) || "";
+      const renderKey = `${sessionId}:${documentId || ""}:${targetFile}:${currentPage}:${currentDpi}`;
+      if (lastAttemptedRenderKey !== renderKey) {
+        lastAttemptedRenderKey = renderKey;
         loadRawPageImage();
       }
     }
@@ -349,7 +370,9 @@
     bind:useWasm
     {wasmInitializing}
     bind:errorMsg
-    onwasmtoggle={setEngineWasm}
+    bind:password={toolbarPassword}
+    onpasswordchange={handlePasswordChange}
+    onwasmtoggle={handleToolbarWasmToggle}
   />
 
   <!-- 2-COLUMN MAIN RESIZABLE LAYOUT -->

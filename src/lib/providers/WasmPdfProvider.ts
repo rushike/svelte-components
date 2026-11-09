@@ -200,18 +200,211 @@ export class WasmPdfProvider implements PdfProvider {
     return null;
   }
 
-  private async resolveFileBytes(path: string, session?: SessionRecord): Promise<Uint8Array | null> {
+  /**
+   * Directly read file bytes from the Origin Private File System (OPFS)
+   * using the standard Web API navigator.storage.getDirectory().
+   */
+  private async readFromOpfsDirect(cleanPath: string, cleanName: string): Promise<Uint8Array | null> {
+    if (typeof navigator === 'undefined' || !navigator.storage?.getDirectory) {
+      return null;
+    }
+    try {
+      const root = await navigator.storage.getDirectory();
+      const segments = cleanPath.split('/').filter(Boolean);
+      const fileName = cleanName || segments[segments.length - 1];
+      if (!fileName) return null;
+
+      // 1. Direct path lookup if multiple segments (e.g. "document/hsbc-credit-stmt.pdf")
+      if (segments.length > 1) {
+        try {
+          let dir: any = root;
+          for (let i = 0; i < segments.length - 1; i++) {
+            dir = await dir.getDirectoryHandle(segments[i]);
+          }
+          const fileHandle = await dir.getFileHandle(segments[segments.length - 1]);
+          const file = await fileHandle.getFile();
+          const buf = await file.arrayBuffer();
+          if (buf.byteLength > 0) return new Uint8Array(buf);
+        } catch (_) {}
+      }
+
+      // 2. Direct lookup in common root directories: document/, documents/, root
+      const prefixes = ['document', 'documents', ''];
+      for (const prefix of prefixes) {
+        try {
+          let dir: any = root;
+          if (prefix) {
+            dir = await dir.getDirectoryHandle(prefix);
+          }
+          const fileHandle = await dir.getFileHandle(fileName);
+          const file = await fileHandle.getFile();
+          const buf = await file.arrayBuffer();
+          if (buf.byteLength > 0) return new Uint8Array(buf);
+        } catch (_) {}
+      }
+
+      // 3. Recursive directory search in OPFS for fileName
+      async function walkDir(dirHandle: any): Promise<Uint8Array | null> {
+        try {
+          for await (const [name, handle] of dirHandle.entries()) {
+            if (handle.kind === 'file') {
+              if (
+                name === fileName ||
+                name.toLowerCase() === fileName.toLowerCase() ||
+                name.endsWith(fileName)
+              ) {
+                const file = await handle.getFile();
+                const buf = await file.arrayBuffer();
+                if (buf.byteLength > 0) return new Uint8Array(buf);
+              }
+            } else if (handle.kind === 'directory') {
+              const res = await walkDir(handle);
+              if (res) return res;
+            }
+          }
+        } catch (_) {}
+        return null;
+      }
+
+      return await walkDir(root);
+    } catch (_) {
+      return null;
+    }
+  }
+
+  /**
+   * Directly writes file bytes to opfs://sessions/<session-id>/<file-name>
+   */
+  async writeToOpfsSession(sessionId: string, fileName: string, bytes: Uint8Array): Promise<string> {
+    const cleanFileName = fileName.replace(/^opfs:\/\/*/, '').split('/').pop() || fileName;
+    const uri = `opfs:///sessions/${sessionId}/${cleanFileName}`;
+    const relPath = `sessions/${sessionId}/${cleanFileName}`;
+
+    // Cache in local memory
+    this.localFiles.set(uri, bytes);
+    this.localFiles.set(relPath, bytes);
+    this.localFiles.set(cleanFileName, bytes);
+
+    // Write directly to native OPFS filesystem
+    if (typeof navigator !== 'undefined' && navigator.storage?.getDirectory) {
+      try {
+        const root = await navigator.storage.getDirectory();
+        const sessionsDir = await root.getDirectoryHandle('sessions', { create: true });
+        const sessionDir = await sessionsDir.getDirectoryHandle(sessionId, { create: true });
+        const fileHandle = await sessionDir.getFileHandle(cleanFileName, { create: true });
+        const writable = await (fileHandle as any).createWritable();
+        await writable.write(bytes);
+        await writable.close();
+      } catch (err) {
+        console.warn(`[WasmPdfProvider] Native OPFS write failed for ${uri}:`, err);
+      }
+    }
+
+    // Also write via MyFS if available
+    if (this.myfs && typeof this.myfs.writeFile === 'function') {
+      try {
+        await this.myfs.writeFile(uri, bytes);
+      } catch (_) {}
+    }
+
+    return uri;
+  }
+
+  /**
+   * Reads file bytes specifically from opfs://sessions/<session-id>/<file-name>
+   */
+  async readFromOpfsSession(sessionId: string, fileName: string): Promise<Uint8Array | null> {
+    const cleanFileName = fileName.replace(/^opfs:\/\/*/, '').split('/').pop() || fileName;
+    const sessionUri = `opfs:///sessions/${sessionId}/${cleanFileName}`;
+    const sessionRel = `sessions/${sessionId}/${cleanFileName}`;
+
+    if (this.localFiles.has(sessionUri) && this.localFiles.get(sessionUri)!.length > 0) {
+      return this.localFiles.get(sessionUri)!;
+    }
+    if (this.localFiles.has(sessionRel) && this.localFiles.get(sessionRel)!.length > 0) {
+      return this.localFiles.get(sessionRel)!;
+    }
+
+    if (typeof navigator !== 'undefined' && navigator.storage?.getDirectory) {
+      try {
+        const root = await navigator.storage.getDirectory();
+        const sessionsDir = await root.getDirectoryHandle('sessions');
+        const sessionDir = await sessionsDir.getDirectoryHandle(sessionId);
+        const fileHandle = await sessionDir.getFileHandle(cleanFileName);
+        const file = await fileHandle.getFile();
+        const buf = await file.arrayBuffer();
+        if (buf.byteLength > 0) {
+          const bytes = new Uint8Array(buf);
+          this.localFiles.set(sessionUri, bytes);
+          this.localFiles.set(sessionRel, bytes);
+          this.localFiles.set(cleanFileName, bytes);
+          return bytes;
+        }
+      } catch (_) {}
+    }
+
+    if (this.myfs && typeof this.myfs.readFile === 'function') {
+      try {
+        const res = await this.myfs.readFile(sessionUri);
+        const bytes = await this.extractBytes(res);
+        if (bytes && bytes.length > 0) {
+          this.localFiles.set(sessionUri, bytes);
+          this.localFiles.set(sessionRel, bytes);
+          this.localFiles.set(cleanFileName, bytes);
+          return bytes;
+        }
+      } catch (_) {}
+    }
+
+    return null;
+  }
+
+  private async deleteOpfsSession(sessionId: string): Promise<void> {
+    if (typeof navigator !== 'undefined' && navigator.storage?.getDirectory) {
+      try {
+        const root = await navigator.storage.getDirectory();
+        const sessionsDir = await root.getDirectoryHandle('sessions');
+        await (sessionsDir as any).removeEntry(sessionId, { recursive: true });
+      } catch (_) {}
+    }
+    if (this.myfs && typeof this.myfs.rmdir === 'function') {
+      try {
+        await this.myfs.rmdir(`opfs:///sessions/${sessionId}`, { recursive: true });
+      } catch (_) {}
+    }
+  }
+
+  private async resolveFileBytes(
+    path: string,
+    session?: SessionRecord,
+    sessionIdHint?: string
+  ): Promise<Uint8Array | null> {
     if (!path) return null;
+
+    const sid = sessionIdHint || session?.id;
 
     // 1. Direct hit in local cache (must have non-zero length)
     if (this.localFiles.has(path) && this.localFiles.get(path)!.length > 0) {
       return this.localFiles.get(path)!;
     }
 
-    // 2. Basename matching in local cache
     const clean = path.replace(/^opfs:\/\/*/, '').replace(/^\/+/, '');
     const cleanName = clean.split('/').pop() || clean;
 
+    // Check if path explicitly contains sessions/<sid>/<file>
+    const sessMatch = clean.match(/^sessions\/([^/]+)\/(.+)$/);
+    const effectiveSid = sid || (sessMatch ? sessMatch[1] : undefined);
+    const effectiveName = sessMatch ? sessMatch[2] : cleanName;
+
+    // 2. If session ID is known, prioritize reading from opfs://sessions/<session-id>/<file-name>
+    if (effectiveSid) {
+      const sessionBytes = await this.readFromOpfsSession(effectiveSid, effectiveName);
+      if (sessionBytes && sessionBytes.length > 0) {
+        return sessionBytes;
+      }
+    }
+
+    // 3. Basename matching in local cache
     if (this.localFiles.has(cleanName) && this.localFiles.get(cleanName)!.length > 0) {
       return this.localFiles.get(cleanName)!;
     }
@@ -222,88 +415,139 @@ export class WasmPdfProvider implements PdfProvider {
       }
     }
 
-    // 3. Try reading via MyFS safely
-    if (this.myfs) {
-      const candidates: string[] = [];
-
-      if (path.startsWith('opfs://')) {
-        candidates.push(path);
-        candidates.push(`opfs:///${clean}`);
-        candidates.push(`opfs:///documents/${cleanName}`);
-      } else if (path.includes('://')) {
-        candidates.push(path);
+    // 4. Native direct OPFS search across filesystem
+    const opfsDirectBytes = await this.readFromOpfsDirect(clean, cleanName);
+    if (opfsDirectBytes && opfsDirectBytes.length > 0) {
+      // If found in general OPFS, ensure it is copied to opfs://sessions/<session-id>
+      if (effectiveSid) {
+        await this.writeToOpfsSession(effectiveSid, cleanName, opfsDirectBytes);
       } else {
-        candidates.push(`opfs:///documents/${clean}`);
-        candidates.push(`opfs:///${clean}`);
-        candidates.push(`opfs:///documents/${cleanName}`);
-        candidates.push(`opfs:///${cleanName}`);
+        this.localFiles.set(path, opfsDirectBytes);
+        this.localFiles.set(cleanName, opfsDirectBytes);
       }
+      return opfsDirectBytes;
+    }
 
-      if (session && session.file_path) {
-        if (session.file_path.includes('://')) {
-          candidates.push(session.file_path);
-        } else {
-          const sClean = session.file_path.replace(/^opfs:\/\/*/, '').replace(/^\/+/, '');
-          candidates.push(`opfs:///documents/${sClean}`);
-          candidates.push(`opfs:///${sClean}`);
-        }
+    // 5. Try reading via MyFS safely if available
+    if (this.myfs) {
+      const myfsUris = [
+        `opfs:///${clean}`,
+        `opfs:///${cleanName}`,
+        `opfs:///document/${cleanName}`,
+        `opfs:///documents/${cleanName}`,
+      ];
+      if (effectiveSid) {
+        myfsUris.unshift(`opfs:///sessions/${effectiveSid}/${cleanName}`);
       }
-
-      for (const uri of candidates) {
+      for (const uri of myfsUris) {
         try {
           const res = await this.myfs.readFile(uri);
           const bytes = await this.extractBytes(res);
           if (bytes && bytes.length > 0) {
-            this.localFiles.set(path, bytes);
-            this.localFiles.set(cleanName, bytes);
-            this.localFiles.set(uri, bytes);
+            if (effectiveSid) {
+              await this.writeToOpfsSession(effectiveSid, cleanName, bytes);
+            } else {
+              this.localFiles.set(path, bytes);
+              this.localFiles.set(cleanName, bytes);
+            }
             return bytes;
           }
         } catch (_) {}
       }
+
+      // Try searching via myfs.dirtree with proper OPFS root URI
+      try {
+        if (typeof this.myfs.dirtree === 'function') {
+          const tree = await this.myfs.dirtree('opfs:///');
+          const matchingPaths: string[] = [];
+          const walkTree = (node: any) => {
+            if (!node) return;
+            if (node.type === 'file' && node.name) {
+              if (
+                node.name === cleanName ||
+                node.name.toLowerCase() === cleanName.toLowerCase() ||
+                node.name.endsWith(cleanName)
+              ) {
+                if (node.path) matchingPaths.push(node.path);
+              }
+            }
+            if (node.children && Array.isArray(node.children)) {
+              for (const child of node.children) walkTree(child);
+            }
+          };
+          walkTree(tree);
+
+          for (const matchPath of matchingPaths) {
+            try {
+              const properUri = matchPath.startsWith('opfs://')
+                ? matchPath
+                : `opfs:///${matchPath.replace(/^\/+/, '')}`;
+              const res = await this.myfs.readFile(properUri);
+              const bytes = await this.extractBytes(res);
+              if (bytes && bytes.length > 0) {
+                if (effectiveSid) {
+                  await this.writeToOpfsSession(effectiveSid, cleanName, bytes);
+                } else {
+                  this.localFiles.set(path, bytes);
+                  this.localFiles.set(cleanName, bytes);
+                }
+                return bytes;
+              }
+            } catch (_) {}
+          }
+        }
+      } catch (_) {}
     }
 
-    // 4. Try network fetch (useful for static sample PDFs or hosted docs)
+    // 6. Network fetch ONLY if explicitly a remote HTTP/HTTPS URL, or as last-resort fallback for bundled sample.pdf
     if (typeof fetch !== 'undefined') {
-      const fetchUrls: string[] = [];
-      if (path.startsWith('http')) {
-        fetchUrls.push(path);
-      } else {
-        fetchUrls.push(`/${clean}`);
-        fetchUrls.push(`/documents/${clean}`);
-      }
-      for (const url of fetchUrls) {
+      const isRemoteUrl = path.startsWith('http://') || path.startsWith('https://');
+      const isSamplePdf = cleanName === 'sample.pdf';
+
+      if (isRemoteUrl) {
         try {
-          const res = await fetch(url);
+          const res = await fetch(path);
           if (res.ok) {
             const buf = await res.arrayBuffer();
             const bytes = new Uint8Array(buf);
             if (bytes.length > 0) {
-              this.localFiles.set(path, bytes);
-              this.localFiles.set(cleanName, bytes);
+              if (effectiveSid) {
+                await this.writeToOpfsSession(effectiveSid, cleanName, bytes);
+              } else {
+                this.localFiles.set(path, bytes);
+              }
               return bytes;
             }
           }
         } catch (_) {}
-      }
-    }
-
-    // 5. Fallback to active session's file bytes if available
-    if (session && session.file_path) {
-      const sessionClean = session.file_path.replace(/^opfs:\/\/*/, '').replace(/^\/+/, '');
-      const sBase = sessionClean.split('/').pop() || sessionClean;
-
-      for (const [key, val] of this.localFiles.entries()) {
-        if (val && val.length > 0 && (key === session.file_path || key.endsWith('/' + sBase))) {
-          return val;
+      } else if (isSamplePdf) {
+        const sampleCandidates = [
+          '/sample.pdf',
+          '/myfinsheet-web/sample.pdf',
+        ];
+        if (typeof window !== 'undefined' && window.location?.origin) {
+          sampleCandidates.push(`${window.location.origin}/sample.pdf`);
+          sampleCandidates.push(`${window.location.origin}/myfinsheet-web/sample.pdf`);
         }
-      }
-    }
 
-    // 6. If only 1 valid file is in localFiles, use it as fallback
-    for (const val of this.localFiles.values()) {
-      if (val && val.length > 0) {
-        return val;
+        for (const url of sampleCandidates) {
+          try {
+            const res = await fetch(url);
+            if (res.ok) {
+              const buf = await res.arrayBuffer();
+              const bytes = new Uint8Array(buf);
+              if (bytes.length > 0) {
+                if (effectiveSid) {
+                  await this.writeToOpfsSession(effectiveSid, 'sample.pdf', bytes);
+                } else {
+                  this.localFiles.set(path, bytes);
+                  this.localFiles.set('sample.pdf', bytes);
+                }
+                return bytes;
+              }
+            }
+          } catch (_) {}
+        }
       }
     }
 
@@ -328,25 +572,20 @@ export class WasmPdfProvider implements PdfProvider {
 
     for (let i = 0; i < items.length; i++) {
       const item = items[i];
-      let filePath = '';
+      let fileName = typeof item === 'string'
+        ? (item.replace(/^opfs:\/\/*/, '').split('/').pop() || item)
+        : item.name;
+      let filePath = `opfs:///sessions/${id}/${fileName}`;
       let bytes: Uint8Array | null = null;
 
       if (typeof item === 'string') {
-        filePath = item.includes('://') ? item : `opfs:///documents/${item.replace(/^\/+/, '')}`;
-        bytes = await this.resolveFileBytes(filePath);
-        if (bytes && bytes.length > 0) {
-          this.localFiles.set(filePath, bytes);
-          const base = filePath.split('/').pop();
-          if (base) this.localFiles.set(base, bytes);
-        }
+        bytes = await this.resolveFileBytes(item, undefined, id);
       } else {
-        filePath = `opfs:///documents/${item.name}`;
         bytes = new Uint8Array(await item.arrayBuffer());
-        if (this.myfs) {
-          try { await this.myfs.writeFile(filePath, bytes); } catch (_) {}
-        }
-        this.localFiles.set(filePath, bytes);
-        this.localFiles.set(item.name, bytes);
+      }
+
+      if (bytes && bytes.length > 0) {
+        await this.writeToOpfsSession(id, fileName, bytes);
       }
 
       if (i === 0) {
@@ -357,7 +596,7 @@ export class WasmPdfProvider implements PdfProvider {
       documents.push({
         id: `${id}:${i}`,
         file_path: filePath,
-        name: filePath.split('/').pop() || filePath,
+        name: fileName,
       });
     }
 
@@ -431,25 +670,25 @@ export class WasmPdfProvider implements PdfProvider {
 
     for (let i = 0; i < files.length; i++) {
       const file = files[i];
-      let filePath: string;
+      let fileName = typeof file === 'string'
+        ? (file.replace(/^opfs:\/\/*/, '').split('/').pop() || file)
+        : file.name;
+      let filePath = `opfs:///sessions/${sessionId}/${fileName}`;
       let bytes: Uint8Array | null = null;
+
       if (typeof file === 'string') {
-        filePath = file.includes('://') ? file : `opfs:///documents/${file.replace(/^\/+/, '')}`;
-        bytes = await this.resolveFileBytes(filePath, session);
+        bytes = await this.resolveFileBytes(file, session, sessionId);
       } else {
-        filePath = `opfs:///documents/${file.name}`;
         bytes = new Uint8Array(await file.arrayBuffer());
-        if (this.myfs) {
-          try { await this.myfs.writeFile(filePath, bytes); } catch (_) {}
-        }
-        this.localFiles.set(filePath, bytes);
-        this.localFiles.set(file.name, bytes);
       }
-      if (!bytes?.length) throw new Error(`Unable to read PDF ${filePath}`);
+      if (!bytes?.length) throw new Error(`Unable to read PDF ${file}`);
+
+      await this.writeToOpfsSession(sessionId, fileName, bytes);
+
       const document: SessionDocument = {
         id: `${sessionId}:${Date.now().toString(36)}_${i}`,
         file_path: filePath,
-        name: filePath.split('/').pop() || filePath,
+        name: fileName,
       };
       added.push(document);
     }
@@ -520,6 +759,7 @@ export class WasmPdfProvider implements PdfProvider {
     await this.ensureInitialized();
     this.localFallbackSessions.delete(id);
     this.persistToLocalStorage();
+    await this.deleteOpfsSession(id);
 
     if (this.db) {
       try {
@@ -552,38 +792,73 @@ export class WasmPdfProvider implements PdfProvider {
       } catch (_) {}
     }
 
-    const fileLoader = async (path: string) => {
+    const fileLoader = async (path: string, sidFromRust?: string) => {
+      const activeSid = sessionId || sidFromRust || session?.id || '';
       const documents: SessionDocument[] = session?.config?.documents || session?.documents || [];
       const clean = path.replace(/^opfs:\/\/*/, '').replace(/^\/+/, '').trim();
+      const cleanName = clean.split('/').pop() || clean;
 
-      // Special aliases resolve to active document or single-document fallback
-      if (!clean || clean === 'session' || clean === 'default' || documents.length === 1) {
+      // Special aliases resolve to active document
+      if (!clean || clean === 'session' || clean === 'default') {
         const activeDoc = documents.find((d) => d.id === session?.config?.active_document_id) || documents[0];
         const targetPath = activeDoc?.file_path || session?.file_path || path;
-        const bytes = await this.resolveFileBytes(targetPath, session);
+        const bytes = await this.resolveFileBytes(targetPath, session, activeSid);
         if (bytes && bytes.length > 0) return bytes;
       }
 
-      // Match strictly within session documents
+      // 1. First, check if file exists in opfs://sessions/<session-id>/<cleanName>
+      if (activeSid) {
+        const sessionBytes = await this.readFromOpfsSession(activeSid, cleanName);
+        if (sessionBytes && sessionBytes.length > 0) return sessionBytes;
+      }
+
+      // 2. Match strictly within session documents
       const matched = documents.find((d) => {
-        if (d.name === clean || d.id === clean) return true;
+        if (d.name === clean || d.id === clean || d.name === cleanName) return true;
         const base = d.file_path.split('/').pop() || d.file_path;
-        if (base === clean) return true;
-        return d.name.toLowerCase() === clean.toLowerCase() || base.toLowerCase() === clean.toLowerCase();
+        if (base === clean || base === cleanName) return true;
+        return d.name.toLowerCase() === cleanName.toLowerCase() || base.toLowerCase() === cleanName.toLowerCase();
       });
 
-      if (!matched) {
-        const available = documents.map((d) => `'${d.name}'`).join(', ');
-        throw new Error(
-          `File "${path}" not found in session boundary (Session: ${sessionId}). Available session files: [${available}]`
-        );
+      if (matched) {
+        const bytes = await this.resolveFileBytes(matched.file_path, session, activeSid);
+        if (bytes && bytes.length > 0) return bytes;
       }
 
-      const bytes = await this.resolveFileBytes(matched.file_path, session);
-      if (bytes && bytes.length > 0) {
-        return bytes;
+      // 3. Fallback: Search OPFS filesystem and copy to opfs://sessions/<session-id>
+      const opfsBytes = await this.resolveFileBytes(path, session, activeSid);
+      if (opfsBytes && opfsBytes.length > 0) {
+        const docName = cleanName;
+        const sessionFilePath = activeSid
+          ? `opfs:///sessions/${activeSid}/${docName}`
+          : (path.includes('://') ? path : `opfs:///document/${docName}`);
+        const newDoc: SessionDocument = {
+          id: `${sessionId}:${Date.now().toString(36)}`,
+          file_path: sessionFilePath,
+          name: docName,
+        };
+        const docs = [...documents];
+        if (!docs.some((d) => d.name === docName)) {
+          docs.push(newDoc);
+          if (session) {
+            session.config = {
+              ...(session.config || {}),
+              documents: docs,
+              active_document_id: newDoc.id,
+            };
+            session.documents = docs;
+            session.file_path = newDoc.file_path;
+            this.localFallbackSessions.set(sessionId, session);
+            this.persistToLocalStorage();
+          }
+        }
+        return opfsBytes;
       }
-      throw new Error(`File loader: unable to read bytes for session file "${matched.name}"`);
+
+      const available = documents.map((d) => `'${d.name}'`).join(', ');
+      throw new Error(
+        `File "${path}" not found in session boundary (opfs://sessions/${activeSid}) or OPFS filesystem. Available session files: [${available || 'none'}]`
+      );
     };
 
     // If DSL contains password, cache it for this session and persist to session config
@@ -599,7 +874,7 @@ export class WasmPdfProvider implements PdfProvider {
       }
     }
 
-    const result = await this.wasm.executeDsl(code, fileLoader);
+    const result = await this.wasm.executeDsl(code, fileLoader, sessionId);
     if (result && result.results && result.results instanceof Map) {
       result.results = Object.fromEntries(result.results);
     }
@@ -619,30 +894,84 @@ export class WasmPdfProvider implements PdfProvider {
     dpi: number = 300,
     targetWidth?: number,
     password?: string,
-    documentId?: string
+    documentId?: string,
+    targetFile?: string
   ): Promise<RenderResult> {
     if (!this.wasm || typeof this.wasm.render !== 'function') {
       throw new Error('render is not available in WASM bundle');
     }
 
     const { session } = await this.getSession(sessionId);
-    const document = documentId
-      ? (session.config?.documents || []).find((item: SessionDocument) => item.id === documentId)
-      : null;
-    const filePath = document?.file_path || session.file_path;
-    const bytes = await this.resolveFileBytes(filePath, session);
+    let filePath = '';
+
+    if (targetFile) {
+      const docs = session.config?.documents || session.documents || [];
+      const cleanTarget = targetFile.replace(/^opfs:\/\/*/, '').replace(/^\/+/, '');
+      const cleanTargetName = cleanTarget.split('/').pop() || cleanTarget;
+      const matched = docs.find((d: any) => {
+        const dName = (d.name || d.file_path || '').split('/').pop();
+        return d.name === targetFile || dName === cleanTargetName || d.file_path === targetFile;
+      });
+      filePath = matched?.file_path || `opfs:///sessions/${sessionId}/${cleanTargetName}`;
+    } else {
+      const document = documentId
+        ? (session.config?.documents || []).find((item: SessionDocument) => item.id === documentId)
+        : null;
+      filePath = document?.file_path || session.file_path;
+    }
+
+    let bytes = await this.resolveFileBytes(filePath, session, sessionId);
+    if ((!bytes || bytes.length === 0) && targetFile && targetFile !== filePath) {
+      bytes = await this.resolveFileBytes(targetFile, session, sessionId);
+    }
+    if ((!bytes || bytes.length === 0) && !targetFile && session.file_path && session.file_path !== filePath) {
+      bytes = await this.resolveFileBytes(session.file_path, session, sessionId);
+    }
     if (!bytes || bytes.length === 0) {
-      throw new Error(`Cannot render page: file bytes not found for ${filePath}`);
+      throw new Error(`Cannot render page: file bytes not found for "${targetFile || filePath || 'document'}" in OPFS filesystem (lookup: opfs://sessions/${sessionId})`);
+    }
+
+    // Auto-register discovered targetFile into session documents if not already registered
+    if (bytes && bytes.length > 0 && targetFile) {
+      const cleanTarget = targetFile.replace(/^opfs:\/\/*/, '').replace(/^\/+/, '');
+      const docName = cleanTarget.split('/').pop() || cleanTarget;
+      const sessionFilePath = `opfs:///sessions/${sessionId}/${docName}`;
+      await this.writeToOpfsSession(sessionId, docName, bytes);
+
+      const docs = session.config?.documents || session.documents || [];
+      if (!docs.some((d: any) => d.name === docName || (d.file_path && d.file_path.split('/').pop() === docName))) {
+        const newDoc: SessionDocument = {
+          id: `${sessionId}:${Date.now().toString(36)}`,
+          file_path: sessionFilePath,
+          name: docName,
+        };
+        const updatedDocs = [...docs, newDoc];
+        session.config = {
+          ...(session.config || {}),
+          documents: updatedDocs,
+          active_document_id: newDoc.id,
+        };
+        session.documents = updatedDocs;
+        session.file_path = newDoc.file_path;
+        this.localFallbackSessions.set(sessionId, session);
+        this.persistToLocalStorage();
+      }
     }
 
     const scale = dpi / 72;
     const pwd = password || this.sessionPasswords.get(sessionId) || session?.config?.password || session?.config?.pdf?.password;
+    if (pwd) {
+      this.sessionPasswords.set(sessionId, pwd);
+    }
     
     let pngBytes: Uint8Array;
     try {
       pngBytes = this.wasm.render(bytes, page, scale, targetWidth, pwd);
     } catch (err: any) {
       const msg = typeof err === 'string' ? err : err?.message || String(err);
+      if (msg.includes('PDFium error 4') || msg.includes('error 4')) {
+        throw new Error('This PDF document is password-protected. Please provide a password in the toolbar, in your DSL query (WITH PASSWORD "..."), or in session settings.');
+      }
       throw new Error(msg);
     }
 

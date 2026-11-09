@@ -32,10 +32,41 @@
 
   let wasmProvider = $state<WasmPdfProvider | null>(null);
   let wasmInitializing = $state(false);
+  let autoCreateAttempted = $state(false);
 
   let activeProvider = $derived(
-    provider || (useWasm && wasmProvider ? wasmProvider : new ServerPdfProvider(baseUrl))
+    useWasm
+      ? wasmProvider
+      : (provider || new ServerPdfProvider(baseUrl))
   );
+
+  async function setEngineMode(enabled: boolean) {
+    if (useWasm === enabled) return;
+    useWasm = enabled;
+    if (typeof localStorage !== 'undefined') {
+      localStorage.setItem(STORAGE_KEY_USE_WASM, enabled ? 'true' : 'false');
+    }
+  }
+
+  async function createDefaultSampleSession() {
+    loading = true;
+    errorMsg = '';
+    try {
+      if (useWasm && !wasmProvider) {
+        wasmProvider = await getOrInitWasmEngine();
+      }
+      const prov = activeProvider;
+      if (!prov) throw new Error('Provider not available');
+      const data = await prov.createSession('sample.pdf', {});
+      await fetchSessions();
+      await selectSession(data.session.id);
+      dispatch('create', { id: data.session.id });
+    } catch (err: any) {
+      errorMsg = `Failed to create default session: ${err.message}`;
+    } finally {
+      loading = false;
+    }
+  }
 
   const dispatch = createEventDispatcher<{
     select: { id: string; file_path: string; page_count: number; document_id?: string | null };
@@ -90,12 +121,20 @@
         activeSessionId = null;
         activeFilePath = '';
         activePageCount = 1;
+        activeDocumentId = null;
+        activeDocuments = [];
         if (typeof localStorage !== 'undefined') {
           localStorage.removeItem(getActiveSessionStorageKey(useWasm));
         }
       }
     } catch (err: any) {
-      errorMsg = `Failed to fetch sessions: ${err.message}`;
+      errorMsg = `Failed to fetch ${useWasm ? 'WASM' : 'Server'} sessions: ${err.message}`;
+      sessions = [];
+      activeSessionId = null;
+      activeFilePath = '';
+      activePageCount = 1;
+      activeDocumentId = null;
+      activeDocuments = [];
     } finally {
       loading = false;
     }
@@ -289,13 +328,27 @@
       <span>Session:</span>
     </div>
 
-    <!-- Engine Mode Badge -->
-    <span
-      class="text-[10px] font-semibold px-2 py-0.5 rounded border shrink-0 {useWasm ? 'bg-emerald-950/80 text-emerald-400 border-emerald-800/80' : 'bg-sky-950/80 text-sky-400 border-sky-800/80'}"
-      title="Active Session Store"
-    >
-      {useWasm ? '⚡ WASM DB' : '🌐 REST Server'}
-    </span>
+    <!-- Engine Mode Switcher -->
+    <div class="inline-flex rounded bg-slate-950 p-0.5 border border-slate-800 shrink-0" title="Switch Session Engine (Server vs WebAssembly)">
+      <button
+        type="button"
+        onclick={() => setEngineMode(false)}
+        class="px-2 py-0.5 text-[10px] font-semibold rounded transition cursor-pointer flex items-center space-x-1 {!useWasm ? 'bg-sky-600 text-white shadow' : 'text-slate-400 hover:text-slate-200'}"
+        title="Switch to Server (API)"
+      >
+        <span>🌐</span>
+        <span>Server</span>
+      </button>
+      <button
+        type="button"
+        onclick={() => setEngineMode(true)}
+        class="px-2 py-0.5 text-[10px] font-semibold rounded transition cursor-pointer flex items-center space-x-1 {useWasm ? 'bg-emerald-600 text-white shadow' : 'text-slate-400 hover:text-slate-200'}"
+        title="Switch to WASM (Client-Side)"
+      >
+        <span>⚡</span>
+        <span>WASM</span>
+      </button>
+    </div>
 
     {#if activeSessionId}
       <div class="flex items-center space-x-2 truncate">
@@ -316,14 +369,25 @@
 
   <div class="flex items-center space-x-2 shrink-0">
     {#if sessions.length === 0}
-      <!-- Prominent Create Indicator Button -->
-      <button
-        onclick={() => (showModal = true)}
-        class="bg-emerald-600 hover:bg-emerald-500 text-white font-bold text-xs px-3 py-1.5 rounded transition shadow-lg animate-pulse flex items-center space-x-1.5"
-      >
-        <span>✨</span>
-        <span>+ Create Session</span>
-      </button>
+      <!-- Option to create either Server or WASM session -->
+      <div class="flex items-center space-x-1.5">
+        <button
+          onclick={() => { setEngineMode(false); showModal = true; }}
+          class="bg-sky-700 hover:bg-sky-600 text-white font-semibold text-xs px-2.5 py-1.5 rounded transition shadow flex items-center space-x-1 cursor-pointer"
+          title="Create or open session on backend server"
+        >
+          <span>🌐</span>
+          <span>+ Server Session</span>
+        </button>
+        <button
+          onclick={() => { setEngineMode(true); showModal = true; }}
+          class="bg-emerald-700 hover:bg-emerald-600 text-white font-semibold text-xs px-2.5 py-1.5 rounded transition shadow flex items-center space-x-1 cursor-pointer"
+          title="Create or open session in client WebAssembly"
+        >
+          <span>⚡</span>
+          <span>+ WASM Session</span>
+        </button>
+      </div>
     {/if}
 
     <button
@@ -382,12 +446,47 @@
           </div>
         {/if}
 
+        <!-- Target Engine Selector in Modal -->
+        <div class="bg-slate-950 border border-slate-800 p-3 rounded-lg flex flex-col sm:flex-row items-center justify-between gap-2.5">
+          <div class="space-y-0.5">
+            <div class="text-xs font-semibold text-slate-200 flex items-center space-x-2">
+              <span>Execution Engine:</span>
+              <span class="text-[10px] font-mono px-2 py-0.5 rounded border {useWasm ? 'bg-emerald-950/80 text-emerald-400 border-emerald-800/80' : 'bg-sky-950/80 text-sky-400 border-sky-800/80'}">
+                {useWasm ? '⚡ WebAssembly (In-Browser OPFS)' : '🌐 REST Server (localhost:9191)'}
+              </span>
+            </div>
+            <p class="text-[11px] text-slate-400">
+              {useWasm
+                ? 'Runs completely client-side in the browser using WASM. No backend server needed.'
+                : 'Connects to local Rust backend server on http://localhost:9191.'}
+            </p>
+          </div>
+          <div class="inline-flex rounded-lg bg-slate-900 p-1 border border-slate-800 space-x-1 shrink-0">
+            <button
+              type="button"
+              onclick={() => setEngineMode(true)}
+              class="px-3 py-1.5 text-xs font-bold rounded transition cursor-pointer flex items-center space-x-1.5 {useWasm ? 'bg-emerald-600 text-white shadow-md' : 'text-slate-400 hover:text-white'}"
+            >
+              <span>⚡</span>
+              <span>WASM (Client)</span>
+            </button>
+            <button
+              type="button"
+              onclick={() => setEngineMode(false)}
+              class="px-3 py-1.5 text-xs font-bold rounded transition cursor-pointer flex items-center space-x-1.5 {!useWasm ? 'bg-sky-600 text-white shadow-md' : 'text-slate-400 hover:text-white'}"
+            >
+              <span>🌐</span>
+              <span>Server (API)</span>
+            </button>
+          </div>
+        </div>
+
         <!-- Empty Sessions Callout Indicator -->
         {#if sessions.length === 0 && !loading}
           <div class="bg-indigo-950/60 border border-indigo-700/60 p-3.5 rounded-lg flex items-center justify-between text-xs text-indigo-200">
             <div class="flex items-center space-x-2">
               <span class="text-lg">💡</span>
-              <span>No active sessions found in <strong>{useWasm ? 'WASM SQLite DB' : 'Server REST API'}</strong>. Enter a path or upload a PDF below to create one.</span>
+              <span>No active sessions found in <strong>{useWasm ? 'WASM SQLite DB' : 'Server REST API'}</strong>. Enter a path, load sample PDF, or upload below to create one.</span>
             </div>
           </div>
         {/if}
@@ -395,8 +494,8 @@
         <!-- Create & Upload Forms -->
         <div class="bg-slate-950 border border-slate-800 p-3.5 rounded-lg space-y-3">
           <div class="text-xs font-semibold text-indigo-300 uppercase tracking-wider flex items-center justify-between">
-            <span>{activeSessionId ? 'Add PDF to Session' : 'Create / Open New Session'}</span>
-            <span class="text-[11px] text-slate-500 font-normal">Target: {useWasm ? 'Client WASM OPFS DB' : 'Server API'}</span>
+            <span>{activeSessionId ? 'Add PDF to Session' : `Create / Open New ${useWasm ? 'WASM' : 'Server'} Session`}</span>
+            <span class="text-[11px] text-slate-500 font-normal">Target: {useWasm ? '⚡ Client WASM OPFS DB' : '🌐 Server API'}</span>
           </div>
           
           <div class="grid grid-cols-1 md:grid-cols-2 gap-3">
@@ -468,6 +567,39 @@
                 class="bg-slate-900 border border-slate-700 text-xs px-2 py-1 rounded text-slate-200 focus:outline-none focus:border-indigo-500 w-36"
               />
             </label>
+          </div>
+
+          <!-- Quick Load Sample PDF Buttons -->
+          <div class="pt-2 border-t border-slate-800/80 flex flex-wrap items-center justify-between gap-2">
+            <span class="text-[11px] text-slate-400">
+              Start instantly with bundled sample PDF:
+            </span>
+            <div class="flex items-center space-x-2">
+              <button
+                type="button"
+                onclick={async () => {
+                  setEngineMode(false);
+                  await createDefaultSampleSession();
+                }}
+                disabled={loading}
+                class="bg-slate-800 hover:bg-slate-700 text-sky-300 hover:text-sky-200 border border-slate-700 text-xs px-2.5 py-1 rounded font-medium transition cursor-pointer flex items-center space-x-1.5 disabled:opacity-50"
+              >
+                <span>🌐</span>
+                <span>Load Server Sample</span>
+              </button>
+              <button
+                type="button"
+                onclick={async () => {
+                  setEngineMode(true);
+                  await createDefaultSampleSession();
+                }}
+                disabled={loading}
+                class="bg-slate-800 hover:bg-slate-700 text-emerald-300 hover:text-emerald-200 border border-slate-700 text-xs px-2.5 py-1 rounded font-medium transition cursor-pointer flex items-center space-x-1.5 disabled:opacity-50"
+              >
+                <span>⚡</span>
+                <span>Load WASM Sample</span>
+              </button>
+            </div>
           </div>
 
           {#if activeSessionId && activeDocuments.length > 0}

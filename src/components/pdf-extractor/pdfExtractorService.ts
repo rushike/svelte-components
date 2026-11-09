@@ -101,7 +101,28 @@ export async function initializeWasmEngine(): Promise<WasmPdfProvider> {
   }
   const initWasm = mypdfutils.initWasm || mypdfutils.default;
   if (typeof initWasm === "function") {
-    await initWasm();
+    try {
+      await initWasm();
+    } catch (err: any) {
+      console.warn("[pdfExtractorService] Default initWasm failed, trying fallbacks:", err?.message || err);
+      let initialized = false;
+      const candidatePaths = [
+        "/mypdfutils_bg.wasm",
+        "/pkg/mypdfutils_bg.wasm",
+        "/myfinsheet-web/pkg/mypdfutils_bg.wasm",
+        "/myfinsheet-web/mypdfutils_bg.wasm",
+      ];
+      for (const p of candidatePaths) {
+        try {
+          await initWasm(p);
+          initialized = true;
+          break;
+        } catch (_) {}
+      }
+      if (!initialized) {
+        throw err;
+      }
+    }
   }
 
   let db = null;
@@ -113,7 +134,7 @@ export async function initializeWasmEngine(): Promise<WasmPdfProvider> {
     if (ClientClass) {
       db = new ClientClass();
       if (typeof db.init === "function") {
-        await db.init().catch(() => {});
+        await db.init().catch(() => { });
       }
     }
   } catch (e) {
@@ -246,4 +267,13 @@ export function extractPasswordFromDsl(code?: string): string | undefined {
   if (!code) return undefined;
   const match = code.match(/WITH\s+PASSWORD\s+(?:=\s*)?["']([^"']+)["']/i);
   return match ? match[1] : undefined;
+}
+
+/**
+ * Extracts the file path or name specified in a DSL query (e.g., LOAD "doc.pdf" ... AS ...).
+ */
+export function extractLoadedFileFromDsl(code?: string): string | undefined {
+  if (!code) return undefined;
+  const match = code.match(/LOAD\s+["']([^"']+)["']/i);
+  return match ? match[1].trim() : undefined;
 }

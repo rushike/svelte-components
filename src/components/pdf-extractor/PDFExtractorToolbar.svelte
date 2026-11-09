@@ -7,13 +7,15 @@
     useWasm = $bindable(false),
     wasmInitializing = false,
     errorMsg = $bindable(""),
+    password = $bindable(""),
     onwasmtoggle = () => {},
+    onpasswordchange = () => {},
   } = $props();
 
-  function handleWasmCheckboxChange(e) {
-    const checked = e.target.checked;
-    useWasm = checked;
-    onwasmtoggle(checked);
+  function handleEngineSwitch(targetWasm) {
+    if (useWasm === targetWasm) return;
+    useWasm = targetWasm;
+    onwasmtoggle(targetWasm);
   }
 </script>
 
@@ -58,32 +60,48 @@
         class="w-12 bg-slate-900 border border-slate-700 rounded px-2 py-1 text-center text-slate-100 focus:border-indigo-500 focus:outline-none"
       />
     </label>
+
+    <label class="flex items-center space-x-1.5 font-medium" title="Password for encrypted PDFs">
+      <span class="text-slate-400">Password:</span>
+      <input
+        type="password"
+        placeholder="Optional"
+        bind:value={password}
+        onchange={() => onpasswordchange(password)}
+        onkeydown={(e) => { if (e.key === 'Enter') onpasswordchange(password); }}
+        class="w-24 bg-slate-900 border border-slate-700 rounded px-2 py-1 text-slate-100 placeholder:text-slate-600 focus:border-indigo-500 focus:outline-none"
+      />
+    </label>
   </div>
 
   <!-- Engine Switcher: Server vs WASM -->
   <div
-    class="flex items-center space-x-2.5 bg-slate-900 border border-slate-700/80 rounded-lg px-3 py-1 shadow-inner"
-    title="Toggle execution between native backend server and WebAssembly (client-side in-browser)"
+    class="flex items-center space-x-2 bg-slate-900 border border-slate-700/80 rounded-lg p-1 shadow-inner"
+    title="Switch Execution Engine (Server vs WebAssembly)"
   >
-    <span class="text-slate-400 font-semibold text-[11px] uppercase tracking-wider">Engine:</span>
-    <label class="inline-flex items-center cursor-pointer select-none">
-      <input
-        type="checkbox"
-        checked={useWasm}
-        onchange={handleWasmCheckboxChange}
-        class="sr-only peer"
-      />
-      <div
-        class="relative w-8 h-4 bg-slate-700 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:start-[2px] after:bg-white after:border-slate-300 after:border after:rounded-full after:h-3 after:w-3 after:transition-all peer-checked:bg-emerald-600"
-      ></div>
-      <span
-        class="ms-2 font-bold text-xs transition-colors {useWasm ? 'text-emerald-400' : 'text-sky-400'}"
+    <span class="text-slate-400 font-semibold text-[11px] uppercase tracking-wider px-1">Engine:</span>
+    <div class="inline-flex rounded-md bg-slate-950 p-0.5 border border-slate-800">
+      <button
+        type="button"
+        onclick={() => handleEngineSwitch(false)}
+        class="px-2.5 py-1 text-xs font-semibold rounded transition cursor-pointer flex items-center space-x-1.5 {!useWasm ? 'bg-sky-600 text-white shadow-md' : 'text-slate-400 hover:text-slate-200'}"
+        title="Switch to Server (API)"
       >
-        {useWasm ? "WASM (Client)" : "Server (API)"}
-      </span>
-    </label>
+        <span>🌐</span>
+        <span>Server</span>
+      </button>
+      <button
+        type="button"
+        onclick={() => handleEngineSwitch(true)}
+        class="px-2.5 py-1 text-xs font-semibold rounded transition cursor-pointer flex items-center space-x-1.5 {useWasm ? 'bg-emerald-600 text-white shadow-md' : 'text-slate-400 hover:text-slate-200'}"
+        title="Switch to WASM (Client-side)"
+      >
+        <span>⚡</span>
+        <span>WASM</span>
+      </button>
+    </div>
     {#if wasmInitializing}
-      <span class="text-[10px] text-amber-400 animate-pulse font-medium">● Loading WASM...</span>
+      <span class="text-[10px] text-amber-400 animate-pulse font-medium px-1">● Loading WASM...</span>
     {/if}
   </div>
 </div>

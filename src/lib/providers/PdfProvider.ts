@@ -62,6 +62,7 @@ export interface PdfProvider {
     dpi?: number,
     targetWidth?: number,
     password?: string,
-    documentId?: string
+    documentId?: string,
+    targetFile?: string
   ): Promise<RenderResult>;
 }
