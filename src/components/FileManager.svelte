@@ -2,16 +2,46 @@
 <script>
   import { Filemanager, Material, getMenuOptions } from "@svar-ui/svelte-filemanager";
   import MyFS from "@rushike/myfs";
-  
+
   const myfs = new MyFS();
+
+  const DOWNLOAD_FORMATS = [
+    { id: "zip", label: "Download as .zip", format: "zip", ext: ".zip" },
+    { id: "gzip", label: "Download as .gz", format: "gzip", ext: ".gz" },
+    { id: "deflate", label: "Download as .zz", format: "deflate", ext: ".zz" },
+    { id: "zstd", label: "Download as .zst", format: "zstd", ext: ".zst" },
+    { id: "raw", label: "Download (raw)", format: "raw", ext: "" },
+  ];
 
   function customMenuOptions(type, item) {
     const options = getMenuOptions(type, item) || [];
+
     if (type === "folder") {
-      if (!options.some(o => o.id === "download")) {
-        options.push({ id: "download", icon: "wxi-download", text: "Download" });
+      options.push({ type: "separator" });
+      for (const fmt of DOWNLOAD_FORMATS.filter((f) => f.id !== "raw")) {
+        options.push({
+          id: `download:${fmt.id}`,
+          icon: "wxi-download",
+          text: fmt.label,
+          handler: () => {
+            void downloadItem(item, fmt.format);
+          },
+        });
+      }
+    } else if (type === "file") {
+      options.push({ type: "separator" });
+      for (const fmt of DOWNLOAD_FORMATS) {
+        options.push({
+          id: `download:${fmt.id}`,
+          icon: "wxi-download",
+          text: fmt.label,
+          handler: () => {
+            void downloadItem(item, fmt.format);
+          },
+        });
       }
     }
+
     return options;
   }
 
@@ -85,6 +115,38 @@
     }
   }
 
+  async function downloadItem(item, format) {
+    const itemId = item?.id;
+    if (!itemId) {
+      console.error("Download failed: no file or folder selected");
+      return;
+    }
+
+    try {
+      const { stream, name } = await myfs.download("opfs://" + itemId, { format });
+      await downloadStream(stream, name);
+    } catch (err) {
+      console.error(`Download failed for "${itemId}" as ${format}:`, err);
+    }
+  }
+
+  function resolveFormat(actionId, itemPath, itemType) {
+    if (actionId?.startsWith("download:")) {
+      return actionId.slice("download:".length);
+    }
+
+    if (itemPath) {
+      const fileName = itemPath.toLowerCase();
+      if (fileName.endsWith(".zst")) return "zstd";
+      if (fileName.endsWith(".gz") || fileName.endsWith(".gzip")) return "gzip";
+      if (fileName.endsWith(".zip")) return "zip";
+      if (fileName.endsWith(".zz")) return "deflate";
+      if (fileName.endsWith(".deflate")) return "deflate-raw";
+    }
+
+    return itemType === "folder" ? "zip" : "raw";
+  }
+
   function init(api) {
     const lastPath = localStorage.getItem("fm:lastPath");
 
@@ -140,8 +202,8 @@
     });
 
     api.on("download-file", async (event) => {
-      console.log("Downloading file ID:", event.id);
-      const { stream, name, type } = await myfs.download("opfs://" + event.id);
+      const format = resolveFormat(event.action, event.id, event.type);
+      const { stream, name } = await myfs.download("opfs://" + event.id, { format });
       await downloadStream(stream, name);
     });
 
