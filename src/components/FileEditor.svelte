@@ -1,8 +1,10 @@
 <script lang="js">
   import { onMount, onDestroy } from "svelte";
   import * as monaco from "monaco-editor";
-  import { readFile, writeFile } from "/myfinsheet-client/opfs.js";
-    import Editor from "./Editor.svelte";
+  import MyFS from "@rushike/myfs";
+  import Editor from "./Editor.svelte";
+
+  const myfs = new MyFS();
 
   /* -------- PROPS (Svelte 5) -------- */
   let { 
@@ -21,8 +23,8 @@
 
   onMount(() => {
     try {
-      readFile(filePath).then(async (file) => {
-        const text = await file.text();
+      myfs.readFile(filePath).then(async (file) => {
+        const text = typeof file.text === 'function' ? await file.text() : new TextDecoder().decode(file);
         
         // Update the source of truth
        content = text;
@@ -42,16 +44,16 @@
   }
 
   async function saveFile(newContent) {
-    writeFile(filePath, newContent);
+    await myfs.writeFile(filePath, newContent);
     onUpdate({ target: { value: newContent } });
   }
 
   // Handle filePath changes
   $effect(() => {
     if (!filePath) return;
-    readFile(filePath).then(async (file) => {
-      content = await file.text();
-    })
+    myfs.readFile(filePath).then(async (file) => {
+      content = typeof file.text === 'function' ? await file.text() : new TextDecoder().decode(file);
+    });
   });
 
 </script>

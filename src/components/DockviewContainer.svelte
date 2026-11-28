@@ -7,7 +7,7 @@
   // import Navigator from './Navigator.svelte';
   // import QueryEditor from './QueryEditor.svelte';
   // import ResultsViewer from './ResultsViewer.svelte';
-    import Configuration from './Configuration.svelte';
+  import Editor from './Editor.svelte';
 
   let container: HTMLDivElement;
   let api: any;
@@ -15,9 +15,9 @@
 
   // Map of component names to Svelte 5 Components
   const componentMap : any = {
-    navigator: Configuration,
-    queryEditor: Configuration,
-    resultsViewer: Configuration
+    navigator: Editor,
+    queryEditor: Editor,
+    resultsViewer: Editor
   };
 
   onMount(() => {
